@@ -8,7 +8,7 @@ import shutil
 from collections import deque
 from pathlib import Path
 
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
 
 try:
 
@@ -191,6 +191,58 @@ def build_visualizer(
         fps=fps,
 
     )
+
+
+
+def export_tensorboard_plots(run_dir: Path, tags: Sequence[str]) -> None:
+    try:
+        from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+    except Exception as err:  # pragma: no cover - optional dependency
+        print(f"[WARN] Unable to export TensorBoard plots: {err}")
+        return
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except Exception as err:  # pragma: no cover - optional dependency
+        print(f"[WARN] Matplotlib not available for plot export: {err}")
+        return
+    if not run_dir.exists():
+        return
+    event_files = list(run_dir.glob('events.out.tfevents.*'))
+    if not event_files:
+        print(f"[WARN] No TensorBoard event files found in {run_dir}")
+        return
+    accumulator = EventAccumulator(str(run_dir))
+    try:
+        accumulator.Reload()
+    except Exception as err:  # pragma: no cover - diagnostics only
+        print(f"[WARN] Failed to read TensorBoard events: {err}")
+        return
+    scalar_tags = set(accumulator.Tags().get('scalars', []))
+    for tag in tags:
+        if tag not in scalar_tags:
+            continue
+        scalars = accumulator.Scalars(tag)
+        if not scalars:
+            continue
+        steps = [item.step for item in scalars]
+        values = [item.value for item in scalars]
+        plt.figure(figsize=(6, 3.5))
+        plt.plot(steps, values, label=tag, linewidth=1.4)
+        plt.xlabel('step')
+        plt.ylabel(tag)
+        plt.title(tag)
+        plt.grid(True, alpha=0.25)
+        plt.tight_layout()
+        safe_name = tag.replace('/', '_') + '.png'
+        out_path = run_dir / safe_name
+        try:
+            plt.savefig(out_path, dpi=180)
+        except Exception as err:  # pragma: no cover - diagnostics only
+            print(f"[WARN] Failed to save plot for {tag}: {err}")
+        plt.close()
+
 
 def write_generations_csv(path: Path, records: List[Dict[str, Any]]) -> None:
 
@@ -4423,6 +4475,7 @@ def train_ga(
     update_status("completed", global_gen)
 
     writer.close()
+    export_tensorboard_plots(run_dir, TENSORBOARD_PNG_TAGS)
 
     write_generations_csv(generations_csv_path, generation_records)
 
