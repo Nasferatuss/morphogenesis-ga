@@ -1,0 +1,122 @@
+﻿seed: 42
+world:
+  width: 15
+  height: 15
+  init_cells: 50
+  steps: 500
+target:
+  name: "T"
+model:
+  embed_dim: 32
+  heads: 4
+simulate:
+  anti_extinction_warmup_steps: 50
+  late_cleanup_start_frac: 0.8
+  die_cap_schedule:
+    - until_step: 150
+      cap_frac: 0.20
+    - until_step: 999999
+      cap_frac: 0.40
+viz:
+  mode: pygame
+  render_every_steps: 3
+  cell_px: 28
+  fps: 20
+  gif:
+    enabled: true
+    every_generations: 10
+    frame_every_steps: 3
+    max_frames: 300
+    out_name: "best.gif"
+    keep_history: true
+device:
+  prefer: cuda
+logging:
+  run_name: curriculum_cross_to_T
+ga:
+  enabled: true
+  population_size: 128
+  generations: 200
+  elite_frac: 0.25
+  mutation_prob: 0.1
+  mutation_std: 0.02
+  n_elites_unchanged: 10
+  eval_steps: 500
+  viz_every_generations: 10
+  checkpoint_every_generations: 10
+  plateau_generations: 50
+  plateau_min_delta: 0.002
+  plateau_stop_entire_run: true
+  plateau_patience_t: 90
+  plateau_warmup_generations_T: 20
+  stem_phase_cleanup_start_frac: 0.82
+  stem_phase_cleanup_power: 1.3
+  late_t_guard:
+    enabled: true
+    coverage_floor: 0.58
+    trunk_floor: 0.42
+    junction_floor: 0.4
+    area_floor: 0.65
+    penalty: 2.7
+    iou_margin: 0.08
+    cooldown_generations: 12
+    area_weight: 1.1
+    reinject_champion: true
+    cleanliness_scale: 0.6
+    alignment_floor: 0.46
+    bar_floor: 0.42
+    empty_area_floor: 0.24
+    history_window: 28
+    recent_window: 6
+    min_viable_history: 6
+    regression_drop_iou: 0.12
+    regression_drop_coverage: 0.25
+    regression_drop_area: 0.28
+    regression_drop_trunk: 0.32
+    regression_drop_junction: 0.3
+    gate_strength: 1.1
+    regression_gate_boost: 1.35
+    champion_pool_size: 4
+    reinject_fraction: 0.12
+    reinject_max_slots: 5
+    regression_mutation_cap: 0.0065
+fitness:
+  alpha_fp: 1.05
+  beta_fn: 1.9
+  gamma_area: 0.24
+  stem_penalty_scale: 0.07
+  stem_cleanup_multiplier: 1.25
+  stem_corridor_start_scale: 2.2
+  stem_corridor_end_scale: 1.15
+  t_symmetry_weight: 0.01
+  t_trunk_weight: 0.05
+  late_t:
+    start_frac: 0.65
+    fp_multiplier: 1.2
+    symmetry_weight: 0.01
+    trunk_weight: 0.02
+    clean_component_weight: 0.12
+    clean_fp_weight: 0.08
+curriculum:
+  enabled: true
+  phases:
+    - name: "phase_cross"
+      target: "cross"
+      generations: 50
+      log_key: "cross"
+    - name: "phase_transition"
+      target: "T"
+      generations: 16
+      blend_from_target: "cross"
+      blend_to_target: "T"
+      log_key: "transition"
+    - name: "phase_T"
+      target: "T"
+      generations: 150
+      log_key: "t"
+    - name: "phase_T_refine"
+      target: "T"
+      generations: 30
+      log_key: "t_refine"
+
+

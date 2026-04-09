@@ -1,0 +1,46 @@
+seed: 42
+world:
+  width: 15
+  height: 15
+  init_cells: 50
+  steps: 500
+target:
+  name: "T"
+model:
+  embed_dim: 32
+  heads: 4
+simulate:
+  anti_extinction_warmup_steps: 50
+  die_cap_schedule:
+    - until_step: 150
+      cap_frac: 0.20
+    - until_step: 999999
+      cap_frac: 0.40
+viz:
+  mode: pygame
+  render_every_steps: 3
+  cell_px: 28
+  fps: 20
+  gif:
+    enabled: true
+    every_generations: 10
+    frame_every_steps: 3
+    max_frames: 300
+    out_name: "best.gif"
+    keep_history: true
+device:
+  prefer: cuda
+logging:
+  run_name: baseline_T
+ga:
+  enabled: true
+  population_size: 128
+  generations: 200
+  elite_frac: 0.2
+  mutation_prob: 0.1
+  mutation_std: 0.01
+  eval_steps: 500
+  viz_every_generations: 10
+fitness:
+  alpha_fp: 1.0
+  beta_fn: 0.5

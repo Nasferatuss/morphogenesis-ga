@@ -1,0 +1,109 @@
+seed: 42
+world:
+  width: 15
+  height: 15
+  init_cells: 50
+  steps: 200
+target:
+  name: "T"
+model:
+  embed_dim: 32
+  heads: 4
+simulate:
+  anti_extinction_warmup_steps: 10
+  late_cleanup_start_frac: 0.8
+viz:
+  mode: pygame
+  render_every_steps: 5
+  cell_px: 20
+  fps: 10
+  gif:
+    enabled: false
+device:
+  prefer: cpu
+logging:
+  run_name: smoke_curriculum
+  disable_tensorboard: false
+ga:
+  enabled: true
+  population_size: 16
+  generations: 4
+  elite_frac: 0.25
+  mutation_prob: 0.1
+  mutation_std: 0.02
+  n_elites_unchanged: 2
+  eval_steps: 200
+  viz_every_generations: 0
+  checkpoint_every_generations: 0
+  plateau_generations: 5
+  plateau_min_delta: 0.01
+  plateau_stop_entire_run: false
+  plateau_patience_t: 6
+  plateau_warmup_generations_T: 2
+  stem_phase_cleanup_start_frac: 0.6
+  stem_phase_cleanup_power: 1.2
+  late_t_guard:
+    enabled: true
+    coverage_floor: 0.58
+    trunk_floor: 0.42
+    junction_floor: 0.4
+    area_floor: 0.65
+    penalty: 2.7
+    iou_margin: 0.08
+    cooldown_generations: 6
+    area_weight: 1.1
+    reinject_champion: true
+    cleanliness_scale: 0.6
+    alignment_floor: 0.46
+    bar_floor: 0.42
+    empty_area_floor: 0.24
+    history_window: 12
+    recent_window: 4
+    min_viable_history: 4
+    regression_drop_iou: 0.12
+    regression_drop_coverage: 0.25
+    regression_drop_area: 0.28
+    regression_drop_trunk: 0.32
+    regression_drop_junction: 0.3
+    gate_strength: 1.1
+    regression_gate_boost: 1.35
+    champion_pool_size: 3
+    reinject_fraction: 0.2
+    reinject_max_slots: 3
+    regression_mutation_cap: 0.0065
+fitness:
+  alpha_fp: 1.05
+  beta_fn: 1.9
+  gamma_area: 0.24
+  stem_penalty_scale: 0.07
+  stem_cleanup_multiplier: 1.1
+  stem_corridor_start_scale: 2.0
+  stem_corridor_end_scale: 1.1
+  t_symmetry_weight: 0.01
+  t_trunk_weight: 0.05
+  late_t:
+    start_frac: 0.5
+    fp_multiplier: 1.1
+    symmetry_weight: 0.01
+    trunk_weight: 0.02
+curriculum:
+  enabled: true
+  phases:
+    - name: "phase_cross"
+      target: "cross"
+      generations: 2
+      log_key: "cross"
+    - name: "phase_transition"
+      target: "T"
+      generations: 1
+      blend_from_target: "cross"
+      blend_to_target: "T"
+      log_key: "transition"
+    - name: "phase_T"
+      target: "T"
+      generations: 2
+      log_key: "t"
+    - name: "phase_T_refine"
+      target: "T"
+      generations: 1
+      log_key: "t_refine"
