@@ -1,7 +1,6 @@
 .venv/
 __pycache__/
-runs/
 *.pyc
-
+$null
 tmp_patch_file
 
