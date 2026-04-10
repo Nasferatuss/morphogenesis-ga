@@ -72,9 +72,14 @@ def play_best(
         0.0, min(1.0, float(simulate_cfg.get("late_cleanup_start_frac", 0.8)))
     )
 
-    model = prepare_model(model_cfg)
+    # Load checkpoint first to detect whether it was trained with spatial
+    # awareness (presence of spatial_proj keys) and build a matching model.
     checkpoint = torch.load(model_path, map_location="cpu")
-    model.load_state_dict(checkpoint)
+    ckpt_has_spatial = any(k.startswith("spatial_proj") for k in checkpoint)
+    model_cfg_with_spatial = dict(model_cfg)
+    model_cfg_with_spatial["use_position"] = ckpt_has_spatial
+    model = prepare_model(model_cfg_with_spatial)
+    model.load_state_dict(checkpoint, strict=False)
     model.to(device)
 
     world = prepare_world(world_cfg, seed)

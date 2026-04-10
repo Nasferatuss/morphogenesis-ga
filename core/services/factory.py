@@ -20,10 +20,16 @@ def prepare_world(world_cfg: Dict[str, Any], seed: int) -> World:
 
 
 def prepare_model(model_cfg: Dict[str, Any]) -> LittleLM:
-    """Create a LittleLM model from config in eval mode."""
+    """Create a LittleLM model from config in eval mode.
+
+    Reads ``use_position`` flag from config (default False for backwards
+    compatibility with legacy checkpoints). Set ``use_position: true`` in
+    YAML config to enable spatial awareness.
+    """
     model = LittleLM(
         embed_dim=int(model_cfg.get("embed_dim", 32)),
         num_heads=int(model_cfg.get("heads", 4)),
+        use_position=bool(model_cfg.get("use_position", False)),
     )
     model.eval()
     return model

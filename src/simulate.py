@@ -206,7 +206,21 @@ def simulate(
             rng_state = world.rng.getstate()
 
             neighbor_tokens = world.get_neighbor_states(positions).to(device)
-            logits = model(neighbor_tokens)
+            # Feed normalized (y, x) positions to spatial-aware LittleLM models.
+            # Gracefully fall back to neighbor-only call if the model doesn't
+            # accept a ``positions`` kwarg (e.g. legacy mocks in tests).
+            if getattr(model, "use_position", False):
+                coords = torch.tensor(
+                    [
+                        [y / max(1, world.height - 1), x / max(1, world.width - 1)]
+                        for y, x in positions
+                    ],
+                    dtype=torch.float32,
+                    device=device,
+                )
+                logits = model(neighbor_tokens, positions=coords)
+            else:
+                logits = model(neighbor_tokens)
             actions = torch.argmax(logits, dim=1).to("cpu").tolist()
 
             living_before = len(positions)

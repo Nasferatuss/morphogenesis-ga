@@ -11,7 +11,11 @@ ModelFactory = Callable[[], LittleLM]
 
 
 def clone_model(model: LittleLM) -> LittleLM:
-    clone = LittleLM(embed_dim=model.embed_dim, num_heads=model.num_heads)
+    clone = LittleLM(
+        embed_dim=model.embed_dim,
+        num_heads=model.num_heads,
+        use_position=getattr(model, "use_position", False),
+    )
     clone.load_state_dict(copy.deepcopy(model.state_dict()))
     clone.eval()
     return clone
@@ -42,7 +46,11 @@ def select_elite(
 
 
 def crossover(parent_a: LittleLM, parent_b: LittleLM) -> LittleLM:
-    child = LittleLM(embed_dim=parent_a.embed_dim, num_heads=parent_a.num_heads)
+    child = LittleLM(
+        embed_dim=parent_a.embed_dim,
+        num_heads=parent_a.num_heads,
+        use_position=getattr(parent_a, "use_position", False),
+    )
     child.eval()
     with torch.no_grad():
         for child_param, param_a, param_b in zip(
