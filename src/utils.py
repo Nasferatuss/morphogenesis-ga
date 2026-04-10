@@ -1,6 +1,5 @@
 ﻿from __future__ import annotations
 
-import os
 import random
 from datetime import datetime
 from pathlib import Path

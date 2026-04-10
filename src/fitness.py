@@ -223,7 +223,7 @@ def _compute_t_structure_breakdown(
 
     height, width = target_bool.shape
     coords = torch.nonzero(target_bool, as_tuple=False)
-    y_min = int(coords[:, 0].min().item()) if coords.numel() > 0 else 0
+    int(coords[:, 0].min().item()) if coords.numel() > 0 else 0
     y_max = int(coords[:, 0].max().item()) if coords.numel() > 0 else height - 1
     x_min = int(coords[:, 1].min().item()) if coords.numel() > 0 else 0
     x_max = int(coords[:, 1].max().item()) if coords.numel() > 0 else width - 1
@@ -236,7 +236,7 @@ def _compute_t_structure_breakdown(
         bar_right = int(bar_indices.max().item())
     else:
         bar_left, bar_right = x_min, x_max
-    bar_len = max(1.0, float(bar_right - bar_left + 1))
+    max(1.0, float(bar_right - bar_left + 1))
     bar_mask = torch.zeros_like(target_bool)
     bar_mask[bar_row, bar_left : bar_right + 1] = target_bool[bar_row, bar_left : bar_right + 1]
     predicted_bar_overlap = torch.logical_and(ab_mask, bar_mask).sum().item()
@@ -650,7 +650,7 @@ def compute_fitness(
     symmetry_weight = max(0.0, float(t_symmetry_weight))
     trunk_weight = max(0.0, float(t_trunk_weight))
     morph_gate = max(0.0, min(1.0, collapse_gate * t_structure_gate_value))
-    morph_bonus = morph_gate * (symmetry_weight * t_symmetry + trunk_weight * t_trunk_continuity)
+    morph_gate * (symmetry_weight * t_symmetry + trunk_weight * t_trunk_continuity)
     late_structure_penalty = 0.0
     weak_trunk_component = 0.0
     junction_miss_component = 0.0
@@ -760,9 +760,7 @@ def compute_fitness(
         "hold_window": stability_info["hold_window"],
         "t_phase_score": t_phase_score,
         "t_structure_bonus": t_structure_bonus,
-        "t_top_bar_coverage": t_breakdown["top_bar_coverage"],
-        "t_top_bar_symmetry": t_breakdown["top_bar_symmetry"],
-        "t_trunk_coverage": t_breakdown["trunk_coverage"],
+        # t_top_bar_coverage, t_top_bar_symmetry, t_trunk_coverage — already set above (L735-739)
         "t_excess_below_ratio": t_breakdown["excess_below_ratio"],
         "t_excess_side_ratio": t_breakdown["excess_side_ratio"],
         "t_area_overshoot": t_breakdown["area_overshoot"],

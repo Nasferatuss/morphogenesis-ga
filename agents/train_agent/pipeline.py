@@ -22,14 +22,26 @@ import torch
 
 from agents.train_agent.mutation import (
     TMutationConfig,
+)
+from agents.train_agent.mutation import (
     compute_phase_cleanup_ratio as _agent_phase_cleanup,
+)
+from agents.train_agent.mutation import (
     resolve_mutation_std as _agent_resolve_mut_std,
+)
+from agents.train_agent.mutation import (
     resolve_stem_penalty_multiplier as _agent_resolve_stem_penalty,
 )
 from agents.train_agent.scoring import (
     compute_benchmark_dict_score as _agent_bench_dict_score,
+)
+from agents.train_agent.scoring import (
     compute_benchmark_score as _agent_bench_score,
+)
+from agents.train_agent.scoring import (
     simple_mean as _agent_simple_mean,
+)
+from agents.train_agent.scoring import (
     simple_variance as _agent_simple_variance,
 )
 from agents.train_agent.t_weights import scale_t_weights as _agent_scale_t_weights
