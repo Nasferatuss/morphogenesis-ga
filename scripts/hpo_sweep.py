@@ -91,6 +91,16 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("runs/hpo"),
     )
+    parser.add_argument(
+        "--multi-seed",
+        type=int,
+        default=5,
+        help=(
+            "Number of world seeds for the multi_seed_iou objective "
+            "(ignored for other objectives). Default 5 matches "
+            "docs/leaderboard.md methodology."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -136,6 +146,9 @@ def main() -> None:
     print(f"[HPO] base_config={args.base_config}")
     print(f"[HPO] search_space={args.search_space} ({len(specs)} params)")
     print(f"[HPO] n_trials={args.n_trials} objective={args.objective}")
+    if args.objective == "multi_seed_iou":
+        print(f"[HPO] multi_seed_n={args.multi_seed}")
+    print(f"[HPO] device={device}")
     print(f"[HPO] output={study_dir}")
     print(f"[HPO] target={target_name} target_area={target_area:.1f}")
 
@@ -164,6 +177,7 @@ def main() -> None:
             device=device,
             seed=seed,
             default_target_name=target_name,
+            multi_seed_n=args.multi_seed,
         )
         elapsed = time.time() - start
         print(

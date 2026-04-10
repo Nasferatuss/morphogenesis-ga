@@ -16,9 +16,11 @@ from typing import Any, Dict, List
 import pytest
 
 from core.services.hpo import (
+    CHECKPOINT_OBJECTIVES,
     VALID_OBJECTIVES,
     ParamSpec,
     apply_params,
+    compute_multi_seed_objective,
     compute_objective,
     load_search_space,
     run_trial,
@@ -284,6 +286,43 @@ class TestComputeObjective:
     def test_valid_objectives_set(self) -> None:
         assert "best_iou" in VALID_OBJECTIVES
         assert "composite" in VALID_OBJECTIVES
+        assert "multi_seed_iou" in VALID_OBJECTIVES
+
+    def test_multi_seed_iou_in_checkpoint_objectives(self) -> None:
+        """multi_seed_iou must route through compute_multi_seed_objective."""
+        assert "multi_seed_iou" in CHECKPOINT_OBJECTIVES
+        assert "best_iou" not in CHECKPOINT_OBJECTIVES
+
+    def test_compute_objective_rejects_multi_seed_iou(self, tmp_path: Path) -> None:
+        """compute_objective must refuse checkpoint-based objectives."""
+        _write_generations_csv(
+            tmp_path, [{"generation": 1, "best_iou": "0.3"}]
+        )
+        with pytest.raises(ValueError, match="requires compute_multi_seed_objective"):
+            compute_objective(tmp_path, "multi_seed_iou")
+
+
+# ---------------------------------------------------------------------------
+# compute_multi_seed_objective
+# ---------------------------------------------------------------------------
+
+
+class TestComputeMultiSeedObjective:
+    def test_missing_checkpoint_returns_neg_inf(self, tmp_path: Path) -> None:
+        missing = tmp_path / "does_not_exist.pt"
+        result = compute_multi_seed_objective(missing, {})
+        assert result == float("-inf")
+
+    def test_import_or_load_failure_returns_neg_inf(self, tmp_path: Path) -> None:
+        """Any exception during load or benchmark is caught → -inf.
+
+        We create an empty file so ``exists()`` passes but
+        ``torch.load`` will fail, exercising the load-failure path.
+        """
+        bad_ckpt = tmp_path / "empty.pt"
+        bad_ckpt.write_bytes(b"")
+        result = compute_multi_seed_objective(bad_ckpt, {}, n_seeds=2)
+        assert result == float("-inf")
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +435,77 @@ class TestRunTrial:
             default_target_name="T",
         )
         assert os.getcwd() == original_cwd
+
+    def test_multi_seed_iou_routes_to_checkpoint_objective(
+        self, tmp_path: Path
+    ) -> None:
+        """When objective=multi_seed_iou, run_trial must call
+        compute_multi_seed_objective (not compute_objective).
+
+        We verify by pointing at a nonexistent best.pt — the
+        multi-seed path returns -inf for a missing checkpoint,
+        while compute_objective(best_iou) would read a fake
+        generations.csv and return a real number. Different return
+        values prove the right branch was taken.
+        """
+        def fake_train_ga(*args: Any, **kwargs: Any) -> Path:
+            # Write a generations.csv that WOULD give 0.5 under best_iou,
+            # then return a best.pt path that doesn't actually exist.
+            run_dir = Path("fake_run_multi")
+            run_dir.mkdir(exist_ok=True)
+            _write_generations_csv(
+                run_dir,
+                [{"generation": 1, "best_iou": "0.5", "best_fitness": "-0.1"}],
+            )
+            return run_dir / "best.pt"  # file not created → -inf
+
+        trial_dir = tmp_path / "trial_0"
+        trial_dir.mkdir()
+        value = run_trial(
+            base_cfg={"ga": {}, "world": {}, "simulate": {}, "target": {}, "model": {}},
+            params={},
+            trial_dir=trial_dir,
+            objective="multi_seed_iou",
+            train_ga_fn=fake_train_ga,
+            target_mask=None,
+            target_area=1.0,
+            device=None,
+            seed=1,
+            default_target_name="T",
+            multi_seed_n=2,
+        )
+        # multi_seed_iou on missing checkpoint → -inf, proving the
+        # correct branch (compute_multi_seed_objective) was taken.
+        assert value == float("-inf")
+
+    def test_best_iou_still_works_with_default_multi_seed_n(
+        self, tmp_path: Path
+    ) -> None:
+        """multi_seed_n default must not break the standard best_iou path."""
+        def fake_train_ga(*args: Any, **kwargs: Any) -> Path:
+            run_dir = Path("fake_run_legacy")
+            run_dir.mkdir(exist_ok=True)
+            _write_generations_csv(
+                run_dir, [{"generation": 1, "best_iou": "0.42"}]
+            )
+            return run_dir / "best.pt"
+
+        trial_dir = tmp_path / "trial_0"
+        trial_dir.mkdir()
+        value = run_trial(
+            base_cfg={"ga": {}},
+            params={},
+            trial_dir=trial_dir,
+            objective="best_iou",
+            train_ga_fn=fake_train_ga,
+            target_mask=None,
+            target_area=1.0,
+            device=None,
+            seed=1,
+            default_target_name="T",
+            # multi_seed_n omitted → uses default 5 → ignored for best_iou
+        )
+        assert value == pytest.approx(0.42)
 
 
 # ---------------------------------------------------------------------------
