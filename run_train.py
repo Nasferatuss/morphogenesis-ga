@@ -1,13 +1,7 @@
 import argparse
-
-import csv
-
-import json
-
 import shutil
 from collections import deque
 from pathlib import Path
-
 from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
 
 try:
@@ -19,42 +13,79 @@ except ImportError:  # pragma: no cover
     np = None
 
 import torch
-
-import yaml
-
 from torch.utils.tensorboard import SummaryWriter
 
-from src.benchmark import BenchmarkConfig, BenchmarkSummary, evaluate_t_benchmark
-
-from src.fitness import compute_fitness
-
-from src.ga import (
-
-    clone_model,
-
-    crossover,
-
-    evaluate_population,
-
-    init_population,
-
-    mutate,
-
-    select_elite,
-
+from agents.eval_agent.pipeline import play_best as _eval_play_best
+from agents.train_agent.mutation import (
+    TMutationConfig,
 )
-
+from agents.train_agent.mutation import (
+    compute_phase_cleanup_ratio as _agent_phase_cleanup,
+)
+from agents.train_agent.mutation import (
+    resolve_mutation_std as _agent_resolve_mut_std,
+)
+from agents.train_agent.mutation import (
+    resolve_stem_penalty_multiplier as _agent_resolve_stem_penalty,
+)
+from agents.train_agent.scoring import (
+    compute_benchmark_dict_score as _agent_bench_dict_score,
+)
+from agents.train_agent.scoring import (
+    compute_benchmark_score as _agent_bench_score,
+)
+from agents.train_agent.scoring import (
+    simple_mean as _agent_simple_mean,
+)
+from agents.train_agent.scoring import (
+    simple_variance as _agent_simple_variance,
+)
+from agents.train_agent.t_weights import scale_t_weights as _agent_scale_t_weights
+from core.memory.metrics_logger import (
+    export_tensorboard_plots as _core_export_tb_plots,
+)
+from core.memory.metrics_logger import (
+    write_generations_csv as _core_write_csv,
+)
+from core.memory.metrics_logger import (
+    write_run_summary as _core_write_summary,
+)
+from core.services.cleanup import compute_late_cleanup_ratio as _core_cleanup_ratio
+from core.services.cleanup import resolve_cleanup_ratio as _core_resolve_cleanup
+from core.services.config_loader import load_config as _core_load_config
+from core.services.factory import build_stability_config as _core_build_stability
+from core.services.factory import prepare_model as _core_prepare_model
+from core.services.factory import prepare_world as _core_prepare_world
+from core.services.stats import summarize as _core_summarize
+from core.services.visualizer import build_visualizer as _core_build_visualizer
+from core.services.writer import build_writer as _core_build_writer
+from src.benchmark import BenchmarkConfig, evaluate_t_benchmark
+from src.fitness import compute_fitness
+from src.ga import (
+    clone_model,
+    crossover,
+    evaluate_population,
+    init_population,
+    mutate,
+    select_elite,
+)
 from src.model import LittleLM
-
 from src.simulate import simulate
-
 from src.targets import make_target
-
-from src.utils import create_run_dir, select_device, set_seed
-
+from src.utils import select_device, set_seed
 from src.viz import GifRecorder, render_grid_to_rgb
-
 from src.world import World
+
+TENSORBOARD_PNG_TAGS: Sequence[str] = (
+    "fitness/best",
+    "fitness/mean",
+    "iou/best",
+    "iou/mean",
+    "stats/alive_best",
+    "stats/area_mean",
+    "coverage/best",
+    "coverage/mean",
+)
 
 def parse_args() -> argparse.Namespace:
 
@@ -127,282 +158,56 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 def load_config(path: str) -> Dict[str, Any]:
-
-    with open(path, "r", encoding="utf-8") as handle:
-
-        return yaml.safe_load(handle)
+    return _core_load_config(path)
 
 def build_writer(run_name: str) -> Tuple[SummaryWriter, Path, str]:
+    return _core_build_writer(run_name)
 
-    log_dir, run_id = create_run_dir("runs", run_name)
-
-    print(f"[INFO] TensorBoard logdir: {log_dir}")
-
-    print(f"[INFO] Run ID: {run_id}")
-
-    writer = SummaryWriter(log_dir=str(log_dir))
-
-    return writer, log_dir, run_id
 
 def build_visualizer(
-
     cfg: Dict[str, Any],
-
     width: int,
-
     height: int,
-
     cell_size: int,
-
     target_mask: torch.Tensor,
-
     force_disable: bool,
-
 ):
-
-    viz_mode = str(cfg.get("mode", "pygame")).lower()
-
-    if force_disable:
-
-        print("[INFO] Visualization disabled via flag.")
-
-        return None
-
-    if viz_mode != "pygame":
-
-        print(f"[INFO] Visualization mode '{viz_mode}' unsupported. Disabled.")
-
-        return None
-
-    from src.viz import Visualizer
-
-    fps = int(cfg.get("fps", 0))
-
-    return Visualizer(
-
-        width=width,
-
-        height=height,
-
-        cell_size=cell_size,
-
-        target_mask=target_mask,
-
-        fps=fps,
-
-    )
-
+    return _core_build_visualizer(cfg, width, height, cell_size, target_mask, force_disable)
 
 
 def export_tensorboard_plots(run_dir: Path, tags: Sequence[str]) -> None:
-    try:
-        from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
-    except Exception as err:  # pragma: no cover - optional dependency
-        print(f"[WARN] Unable to export TensorBoard plots: {err}")
-        return
-    try:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-    except Exception as err:  # pragma: no cover - optional dependency
-        print(f"[WARN] Matplotlib not available for plot export: {err}")
-        return
-    if not run_dir.exists():
-        return
-    event_files = list(run_dir.glob('events.out.tfevents.*'))
-    if not event_files:
-        print(f"[WARN] No TensorBoard event files found in {run_dir}")
-        return
-    accumulator = EventAccumulator(str(run_dir))
-    try:
-        accumulator.Reload()
-    except Exception as err:  # pragma: no cover - diagnostics only
-        print(f"[WARN] Failed to read TensorBoard events: {err}")
-        return
-    scalar_tags = set(accumulator.Tags().get('scalars', []))
-    for tag in tags:
-        if tag not in scalar_tags:
-            continue
-        scalars = accumulator.Scalars(tag)
-        if not scalars:
-            continue
-        steps = [item.step for item in scalars]
-        values = [item.value for item in scalars]
-        plt.figure(figsize=(6, 3.5))
-        plt.plot(steps, values, label=tag, linewidth=1.4)
-        plt.xlabel('step')
-        plt.ylabel(tag)
-        plt.title(tag)
-        plt.grid(True, alpha=0.25)
-        plt.tight_layout()
-        safe_name = tag.replace('/', '_') + '.png'
-        out_path = run_dir / safe_name
-        try:
-            plt.savefig(out_path, dpi=180)
-        except Exception as err:  # pragma: no cover - diagnostics only
-            print(f"[WARN] Failed to save plot for {tag}: {err}")
-        plt.close()
+    _core_export_tb_plots(run_dir, tags)
 
 
 def write_generations_csv(path: Path, records: List[Dict[str, Any]]) -> None:
+    _core_write_csv(path, records)
 
-    if not records:
-
-        return
-
-    fieldnames: List[str] = []
-
-    for record in records:
-
-        for key in record.keys():
-
-            if key not in fieldnames:
-
-                fieldnames.append(key)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with path.open("w", newline="", encoding="utf-8") as handle:
-
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-
-        writer.writeheader()
-
-        for record in records:
-
-            writer.writerow(record)
 
 def write_run_summary(path: Path, payload: Dict[str, Any]) -> None:
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _core_write_summary(path, payload)
 
 def compute_late_cleanup_ratio(
-
     steps_done: int, planned_steps: int, cleanup_start_frac: float = 0.8
-
 ) -> float:
+    return _core_cleanup_ratio(steps_done, planned_steps, cleanup_start_frac)
 
-    if planned_steps <= 0:
-
-        return 0.0
-
-    start_frac = max(0.0, min(1.0, float(cleanup_start_frac)))
-
-    cleanup_start = max(1, int(planned_steps * start_frac))
-
-    if cleanup_start > planned_steps:
-
-        cleanup_start = planned_steps
-
-    if steps_done < cleanup_start:
-
-        return 0.0
-
-    window_span = max(1, planned_steps - cleanup_start + 1)
-
-    late_steps = steps_done - cleanup_start + 1
-
-    ratio = late_steps / window_span
-
-    if ratio < 0.0:
-
-        return 0.0
-
-    if ratio > 1.0:
-
-        return 1.0
-
-    return float(ratio)
 
 def resolve_cleanup_ratio(
-
     sim_result: Dict[str, Any], planned_steps: int, cleanup_start_frac: float
-
 ) -> float:
+    return _core_resolve_cleanup(sim_result, planned_steps, cleanup_start_frac)
 
-    ratio = sim_result.get("late_cleanup_ratio")
-
-    if ratio is not None:
-
-        try:
-
-            clamped = float(ratio)
-
-        except (TypeError, ValueError):
-
-            clamped = 0.0
-
-        else:
-
-            if clamped < 0.0:
-
-                return 0.0
-
-            if clamped > 1.0:
-
-                return 1.0
-
-            return clamped
-
-    steps_done = int(sim_result.get("steps", planned_steps))
-
-    return compute_late_cleanup_ratio(steps_done, planned_steps, cleanup_start_frac)
 
 def prepare_world(world_cfg: Dict[str, Any], seed: int) -> World:
+    return _core_prepare_world(world_cfg, seed)
 
-    world = World(
-
-        width=int(world_cfg.get("width", 15)),
-
-        height=int(world_cfg.get("height", 15)),
-
-        init_cells=int(world_cfg.get("init_cells", 50)),
-
-        seed=seed,
-
-    )
-
-    world.reset()
-
-    return world
 
 def prepare_model(model_cfg: Dict[str, Any]) -> LittleLM:
+    return _core_prepare_model(model_cfg)
 
-    model = LittleLM(
-
-        embed_dim=int(model_cfg.get("embed_dim", 32)),
-
-        num_heads=int(model_cfg.get("heads", 4)),
-
-    )
-
-    model.eval()
-
-    return model
 
 def build_stability_config(benchmark_cfg: Dict[str, Any]) -> Dict[str, Any]:
-
-    reach = float(benchmark_cfg.get("reach_threshold_iou", 0.7))
-
-    stabilize = float(benchmark_cfg.get("stabilize_threshold_iou", reach))
-
-    hold_steps = int(benchmark_cfg.get("hold_window_steps", 0))
-
-    enabled = bool(benchmark_cfg.get("enabled", False)) or reach > 0.0 or hold_steps > 0
-
-    return {
-
-        "enabled": enabled,
-
-        "reach_threshold_iou": reach,
-
-        "stabilize_threshold_iou": stabilize,
-
-        "hold_window_steps": hold_steps,
-
-    }
+    return _core_build_stability(benchmark_cfg)
 
 def run_single_simulation(
 
@@ -458,8 +263,6 @@ def run_single_simulation(
 
     stability_cfg = build_stability_config(stability_source)
 
-    target_label = str(cfg.get("target", {}).get("name", "")).lower()
-
     t_phase_weights = fitness_cfg.get("t_phase_weights") if target_label == "t" else None
 
     steps_cfg = int(world_cfg.get("steps", 0))
@@ -488,60 +291,6 @@ def run_single_simulation(
 
     t_trunk_weight = float(fitness_cfg.get("t_trunk_weight", 0.0))
 
-    late_t_cfg = fitness_cfg.get("late_t", {})
-
-    late_fp_multiplier = float(late_t_cfg.get("fp_multiplier", 1.0))
-
-    late_symmetry_bonus = float(late_t_cfg.get("symmetry_weight", 0.0))
-
-    late_trunk_bonus = float(late_t_cfg.get("trunk_weight", 0.0))
-
-    late_clean_component_weight = float(late_t_cfg.get("clean_component_weight", 0.0))
-
-    late_clean_fp_weight = float(late_t_cfg.get("clean_fp_weight", 0.0))
-
-    late_t_start_frac = max(0.0, min(1.0, float(late_t_cfg.get("start_frac", 0.65))))
-
-    geometry_focus_cfg = fitness_cfg.get("geometry_focus", {})
-
-    geometry_transition_reward_scale = float(geometry_focus_cfg.get("transition_reward_scale", 0.7))
-
-    geometry_transition_penalty_scale = float(geometry_focus_cfg.get("transition_penalty_scale", 0.45))
-
-    geometry_transition_cleanliness_scale = float(geometry_focus_cfg.get("transition_cleanliness_scale", 0.5))
-
-    geometry_late_structure_boost = float(geometry_focus_cfg.get("late_structure_boost", 1.3))
-
-    geometry_late_penalty_boost = float(geometry_focus_cfg.get("late_penalty_boost", 1.15))
-
-    geometry_late_cleanliness_boost = float(geometry_focus_cfg.get("late_cleanliness_boost", 1.1))
-
-    geometry_early_structure_scale = float(geometry_focus_cfg.get("early_structure_scale", 1.0))
-
-    geometry_early_penalty_scale = float(geometry_focus_cfg.get("early_penalty_scale", 1.0))
-
-    geometry_early_clean_scale = float(geometry_focus_cfg.get("early_clean_scale", 1.0))
-
-    geometry_early_stop_frac = max(0.0, min(1.0, float(geometry_focus_cfg.get("early_stop_frac", 0.0))))
-
-    cleanliness_cfg = fitness_cfg.get("cleanliness", {})
-
-    clean_component_start = float(cleanliness_cfg.get("component_weight_start", 0.03))
-
-    clean_component_target = float(
-
-        cleanliness_cfg.get("component_weight_target", late_clean_component_weight)
-
-    )
-
-    clean_fp_start = float(cleanliness_cfg.get("fp_weight_start", 0.02))
-
-    clean_fp_target = float(cleanliness_cfg.get("fp_weight_target", late_clean_fp_weight))
-
-    clean_ramp_start = float(cleanliness_cfg.get("ramp_start", 0.25))
-
-    clean_ramp_end = float(cleanliness_cfg.get("ramp_end", 0.8))
-
     coverage_cfg = fitness_cfg.get("coverage", {})
 
     coverage_target_floor_base = float(coverage_cfg.get("target_floor", 0.55))
@@ -563,54 +312,6 @@ def run_single_simulation(
     sparse_area_floor = sparse_area_floor_base
 
     sparse_penalty_weight = sparse_penalty_weight_base
-
-    empty_collapse_cfg = fitness_cfg.get("empty_collapse", {})
-
-    empty_collapse_area_floor = float(empty_collapse_cfg.get("area_floor", 0.0))
-
-    empty_collapse_coverage_floor = float(empty_collapse_cfg.get("coverage_floor", 0.0))
-
-    empty_collapse_penalty_weight = float(empty_collapse_cfg.get("penalty_weight", 0.0))
-
-    empty_collapse_suppress_scale = float(empty_collapse_cfg.get("suppress_scale", 0.0))
-
-    phase_transition_cfg = cfg.get("phase_transition", {})
-
-    transition_cleanliness_scale = float(phase_transition_cfg.get("cleanliness_scale", 0.6))
-
-    transition_coverage_floor = float(phase_transition_cfg.get("coverage_floor", 0.4))
-
-    transition_mutation_std = float(phase_transition_cfg.get("mutation_std", 0.015))
-
-    transition_bridge_weight = float(phase_transition_cfg.get("bridge_weight", 0.7))
-
-    transition_bridge_min = float(phase_transition_cfg.get("bridge_min_weight", transition_bridge_weight))
-
-    transition_gate_power = float(phase_transition_cfg.get("gate_power", 1.0))
-
-    transition_reward_bias = float(phase_transition_cfg.get("reward_bias", 0.5))
-
-    transition_penalty_relief = float(phase_transition_cfg.get("penalty_relief", 0.5))
-
-    transition_t_phase_gate_start = float(phase_transition_cfg.get("t_phase_gate_start", 0.25))
-
-    transition_structure_gate_start = float(phase_transition_cfg.get("structure_gate_start", 0.35))
-
-    transition_clean_gate_start = float(phase_transition_cfg.get("cleanliness_gate_start", 0.0))
-
-    transition_collapse_area_floor = float(phase_transition_cfg.get("collapse_area_floor", 0.0))
-
-    transition_collapse_coverage_floor = float(phase_transition_cfg.get("collapse_coverage_floor", 0.0))
-
-    transition_collapse_penalty_scale = float(phase_transition_cfg.get("collapse_penalty_scale", 0.5))
-
-    transition_collapse_suppress_scale = float(phase_transition_cfg.get("collapse_suppress_scale", 0.5))
-
-    transition_bridge_hold_frac = max(0.0, min(0.95, float(phase_transition_cfg.get("bridge_hold_frac", 0.25))))
-
-    transition_mutation_warmup_frac = max(0.0, min(1.0, float(phase_transition_cfg.get("mutation_warmup_frac", 0.45))))
-
-    transition_mutation_warmup_power = max(0.1, float(phase_transition_cfg.get("mutation_warmup_power", 1.0)))
 
     target_area = float(target_mask.to(dtype=torch.bool).sum().item())
 
@@ -801,28 +502,7 @@ def run_single_simulation(
     writer.close()
 
 def summarize(values: List[float], percentile: float) -> Tuple[float, float]:
-
-    if not values:
-
-        return 0.0, 0.0
-
-    if np is not None:
-
-        mean_val = float(np.mean(values))
-
-        perc = float(np.percentile(values, percentile))
-
-    else:
-
-        mean_val = float(sum(values) / len(values))
-
-        sorted_vals = sorted(values)
-
-        idx = int(round((percentile / 100.0) * (len(sorted_vals) - 1)))
-
-        perc = float(sorted_vals[idx])
-
-    return mean_val, perc
+    return _core_summarize(values, percentile)
 
 def train_ga(
 
@@ -1064,13 +744,13 @@ def train_ga(
 
     t_sparse_guard_enabled = bool(t_sparse_guard_cfg.get("enabled", False))
 
-    t_sparse_guard_coverage_floor = float(t_sparse_guard_cfg.get("coverage_floor", 0.4))
+    float(t_sparse_guard_cfg.get("coverage_floor", 0.4))
 
-    t_sparse_guard_area_floor = float(t_sparse_guard_cfg.get("area_floor", 0.4))
+    float(t_sparse_guard_cfg.get("area_floor", 0.4))
 
-    t_sparse_guard_penalty = float(t_sparse_guard_cfg.get("penalty", 2.5))
+    float(t_sparse_guard_cfg.get("penalty", 2.5))
 
-    t_sparse_guard_area_weight = float(t_sparse_guard_cfg.get("area_weight", 1.0))
+    float(t_sparse_guard_cfg.get("area_weight", 1.0))
 
     t_sparse_guard_stop_frac = max(0.0, min(1.0, float(t_sparse_guard_cfg.get("stop_frac", 0.4))))
 
@@ -1242,8 +922,6 @@ def train_ga(
 
                 train_stability_cfg.get("reach_threshold_iou", 0.0),
 
-                late_t_enforce=late_stage_enforcer_cfg if enable_t_metrics else None,
-
             )
 
         )
@@ -1364,13 +1042,13 @@ def train_ga(
 
     gifs_train_dir = gifs_dir / "train"
 
-    gifs_benchmark_dir = gifs_dir / "benchmark"
+    gifs_dir / "benchmark"
 
     checkpoints_dir = run_dir / "checkpoints"
 
     benchmark_dir = run_dir / "benchmark"
 
-    reports_dir = run_dir / "reports"
+    run_dir / "reports"
 
     generations_csv_path = run_dir / "generations.csv"
 
@@ -1424,19 +1102,8 @@ def train_ga(
 
         status_timeline.append({"status": new_status, "generation": generation})
 
-    def _simple_mean(values: List[float]) -> float:
-
-        return float(sum(values) / len(values)) if values else 0.0
-
-    def _simple_variance(values: List[float]) -> float:
-
-        if len(values) < 2:
-
-            return 0.0
-
-        mean_val = _simple_mean(values)
-
-        return float(sum((val - mean_val) ** 2 for val in values) / len(values))
+    _simple_mean = _agent_simple_mean
+    _simple_variance = _agent_simple_variance
 
     def resolve_target_mask(name: str) -> Tuple[torch.Tensor, float]:
 
@@ -1484,37 +1151,8 @@ def train_ga(
 
     late_t_champion_pool: Deque[Dict[str, Any]] = deque(maxlen=late_t_guard_pool_size if late_t_guard_enabled else 1)
 
-    def compute_benchmark_score(summary: BenchmarkSummary) -> float:
-
-        return (
-
-            1.5 * summary.success_rate_stabilized
-
-            + summary.success_rate_reach
-
-            + summary.mean_final_iou
-
-            + 0.25 * summary.mean_best_iou
-
-        )
-
-    def compute_benchmark_dict_score(summary_dict: Optional[Dict[str, Any]]) -> float:
-
-        if not summary_dict:
-
-            return 0.0
-
-        return (
-
-            1.5 * float(summary_dict.get("success_rate_stabilized", 0.0))
-
-            + float(summary_dict.get("success_rate_reach", 0.0))
-
-            + float(summary_dict.get("mean_final_iou", 0.0))
-
-            + 0.25 * float(summary_dict.get("mean_best_iou", 0.0))
-
-        )
+    compute_benchmark_score = _agent_bench_score
+    compute_benchmark_dict_score = _agent_bench_dict_score
 
     def run_benchmark_mode(mode_state: Dict[str, Any], reason: str) -> None:
 
@@ -1736,7 +1374,7 @@ def train_ga(
 
         if score >= mode_state["champion_min_score"] and score > current_champion_score + 1e-6:
 
-            shutil.copyfile(checkpoint_path, champion_path)
+            shutil.copyfile(best_checkpoint_path, champion_path)
 
             champion_score = score
 
@@ -2058,157 +1696,33 @@ def train_ga(
 
     gif_keep_history = bool(gif_cfg.get("keep_history", False))
 
+    _t_mut_cfg = TMutationConfig(
+        ease_power=t_mutation_ease_power,
+        std_start=t_mutation_std_start,
+        std_end=t_mutation_std_end,
+        std_floor=t_mutation_std_floor,
+        std_cap=t_mutation_std_cap,
+        warmup_frac=t_mutation_warmup_frac,
+    )
+
     def resolve_mutation_std(phase_target: str, phase_name: str, phase_step: int, total_steps: int) -> float:
-
-        key = str(phase_target or "").lower()
-
-        name_key = str(phase_name or "").lower()
-
-        if "refine" in name_key:
-
-            return 0.0015
-
-        if key == "cross" or name_key.startswith("phase_cross"):
-
-            return 0.02
-
-        if "transition" in name_key or name_key.startswith("phase_transition"):
-
-            return 0.015
-
-        if key == "t" or name_key.startswith("phase_t"):
-
-            progress = (phase_step + 1) / max(1, total_steps)
-
-            eased = progress ** t_mutation_ease_power
-
-            base_std = t_mutation_std_start + (t_mutation_std_end - t_mutation_std_start) * eased
-
-            base_std = max(t_mutation_std_floor, base_std)
-
-            warmup_gate = min(1.0, progress / max(1e-6, t_mutation_warmup_frac))
-
-            gated_std = t_mutation_std_floor + (base_std - t_mutation_std_floor) * warmup_gate
-
-            return max(t_mutation_std_floor, min(t_mutation_std_cap, gated_std))
-
-        return mutation_std
+        return _agent_resolve_mut_std(
+            phase_target, phase_name, phase_step, total_steps,
+            default_std=mutation_std, t_cfg=_t_mut_cfg,
+        )
 
     def resolve_stem_penalty_multiplier(phase_target: str, phase_name: str, phase_step: int, total_steps: int) -> float:
-
-        key = str(phase_target or "").lower()
-
-        name_key = str(phase_name or "").lower()
-
-        if "transition" in name_key or name_key.startswith("phase_transition"):
-
-            return 0.6
-
-        if key == "t" or name_key.startswith("phase_t"):
-
-            easing_steps = max(1, min(total_steps, 20))
-
-            if phase_step < easing_steps:
-
-                start, end = 0.6, 1.0
-
-                ratio = (phase_step + 1) / easing_steps
-
-                return start + (end - start) * max(0.0, min(1.0, ratio))
-
-            return 1.0
-
-        return 1.0
+        return _agent_resolve_stem_penalty(phase_target, phase_name, phase_step, total_steps)
 
     def compute_phase_cleanup_ratio(phase_target: str, phase_step: int, total_steps: int) -> float:
-
-        key = str(phase_target or "").lower()
-
-        if key != "t":
-
-            return 0.0
-
-        if stem_phase_cleanup_start_frac >= 1.0:
-
-            return 0.0
-
-        progress = (phase_step + 1) / max(1, total_steps)
-
-        if progress <= stem_phase_cleanup_start_frac:
-
-            return 0.0
-
-        span = max(1e-6, 1.0 - stem_phase_cleanup_start_frac)
-
-        ratio = (progress - stem_phase_cleanup_start_frac) / span
-
-        ratio = max(0.0, min(1.0, ratio))
-
-        return ratio ** stem_phase_cleanup_power
-
-    T_STRUCTURE_REWARD_KEYS = (
-
-        "top_bar_weight",
-
-        "trunk_weight",
-
-        "symmetry_weight",
-
-        "bar_alignment_weight",
-
-        "trunk_alignment_weight",
-
-        "junction_weight",
-
-    )
-
-    T_STRUCTURE_PENALTY_KEYS = (
-
-        "excess_below_weight",
-
-        "excess_side_weight",
-
-        "overshoot_weight",
-
-        "undershoot_weight",
-
-        "fragment_weight",
-
-        "trunk_extra_weight",
-
-        "side_clutter_weight",
-
-        "off_axis_weight",
-
-        "endpoint_clutter_weight",
-
-    )
+        return _agent_phase_cleanup(
+            phase_target, phase_step, total_steps,
+            cleanup_start_frac=stem_phase_cleanup_start_frac,
+            cleanup_power=stem_phase_cleanup_power,
+        )
 
     def scale_t_weights_values(reward_scale: float, penalty_scale: float, clean_scale: float) -> Optional[Dict[str, float]]:
-
-        if not base_t_phase_weights:
-
-            return None
-
-        scaled = {k: float(v) for k, v in base_t_phase_weights.items()}
-
-        for key in T_STRUCTURE_REWARD_KEYS:
-
-            if key in scaled:
-
-                scaled[key] *= reward_scale
-
-        for key in T_STRUCTURE_PENALTY_KEYS:
-
-            if key in scaled:
-
-                scaled[key] *= penalty_scale
-
-        if "cleanliness_weight" in scaled:
-
-            scaled["cleanliness_weight"] *= clean_scale
-
-        return scaled
+        return _agent_scale_t_weights(base_t_phase_weights, reward_scale, penalty_scale, clean_scale)
 
     t_weight_reward_scale = 1.0
 
@@ -3372,12 +2886,25 @@ def train_ga(
 
                 print(f"[WARN] Failed to save latest candidate: {err}")
 
+            # --- Early extraction of best metrics (needed by late T-guard below) ---
+            best_fit = best_metrics["fitness"]
+            best_iou = best_metrics["iou"]
+            alive_best = best_metrics["alive_end"]
+            area_best = best_metrics["area"]
+            target_coverage_best = best_metrics.get("target_coverage_ratio", 0.0)
+            area_ratio_best = area_best / phase_target_area if phase_target_area > 0 else 0.0
+            empty_candidate_blocked = False
+            if phase_is_t and (
+                target_coverage_best < empty_candidate_coverage_floor
+                or area_ratio_best < empty_candidate_area_floor
+            ):
+                empty_candidate_blocked = True
+
             if late_t_guard_enabled and phase_is_pure_t and not phase_is_transition:
                 coverage_val = max(0.0, target_coverage_best)
                 trunk_val = max(0.0, best_metrics.get("t_trunk_coverage", 0.0))
                 junction_val = max(0.0, best_metrics.get("t_junction_score", 0.0))
                 alignment_val = max(0.0, best_metrics.get("t_trunk_alignment_score", 0.0))
-                area_ratio_best = area_best / phase_target_area if phase_target_area > 0 else 0.0
             if late_t_guard_enabled and (phase_is_pure_t or phase_is_refine):
                 late_t_metrics_history.append(
                     {
@@ -3469,13 +2996,7 @@ def train_ga(
             else:
                 best_metrics["late_regression_flag"] = 1.0 if late_t_regression_counter > 0 else 0.0
 
-            best_fit = best_metrics["fitness"]
-
-            best_iou = best_metrics["iou"]
-
-            alive_best = best_metrics["alive_end"]
-
-            area_best = best_metrics["area"]
+            # best_fit, best_iou, alive_best, area_best — extracted earlier (before late T-guard)
 
             if best_fit > phase_record.get("best_fitness", float("-inf")):
 
@@ -3545,25 +3066,11 @@ def train_ga(
 
             anti_ext_mean, _ = summarize([m["anti_ext"] for m in metrics], 95.0)
 
-            target_coverage_best = best_metrics.get("target_coverage_ratio", 0.0)
+            # target_coverage_best, area_ratio_best, empty_candidate_blocked — extracted earlier
 
             coverage_values = [m.get("target_coverage_ratio", 0.0) for m in metrics]
 
             coverage_mean = _simple_mean(coverage_values)
-
-            area_ratio_best = area_best / phase_target_area if phase_target_area > 0 else 0.0
-
-            empty_candidate_blocked = False
-
-            if phase_is_t and (
-
-                target_coverage_best < empty_candidate_coverage_floor
-
-                or area_ratio_best < empty_candidate_area_floor
-
-            ):
-
-                empty_candidate_blocked = True
 
             num_components_best = best_metrics["num_components"]
 
@@ -4562,310 +4069,13 @@ def train_ga(
     return best_path
 
 def play_best(
-
     cfg: Dict[str, Any],
-
     args: argparse.Namespace,
-
     device: torch.device,
-
     target_mask: torch.Tensor,
-
     seed: int,
-
 ) -> None:
-
-    if args.no_viz:
-
-        raise RuntimeError("--play-best requires visualization. Remove --no-viz to view the replay.")
-
-    model_path = Path(args.play_best)
-
-    if not model_path.exists():
-
-        raise FileNotFoundError(f"Best model checkpoint not found: {model_path}")
-
-    world_cfg = cfg.get("world", {})
-
-    model_cfg = cfg.get("model", {})
-
-    viz_cfg = cfg.get("viz", {})
-
-    simulate_cfg = cfg.get("simulate", {})
-
-    ga_cfg = cfg.get("ga", {})
-
-    fitness_cfg = cfg.get("fitness", {})
-
-    benchmark_cfg = cfg.get("benchmark", {})
-
-    target_cfg = cfg.get("target", {})
-
-    target_label = str(target_cfg.get("name", "T")).lower()
-
-    empty_collapse_cfg = fitness_cfg.get("empty_collapse", {})
-
-    empty_collapse_area_floor = float(empty_collapse_cfg.get("area_floor", 0.0))
-
-    empty_collapse_coverage_floor = float(empty_collapse_cfg.get("coverage_floor", 0.0))
-
-    empty_collapse_penalty_weight = float(empty_collapse_cfg.get("penalty_weight", 0.0))
-
-    empty_collapse_suppress_scale = float(empty_collapse_cfg.get("suppress_scale", 0.0))
-
-    stability_source = (
-
-        benchmark_cfg.get("stability")
-
-        or benchmark_cfg.get("baseline")
-
-        or benchmark_cfg.get("target")
-
-        or benchmark_cfg
-
-    )
-
-    stability_cfg = build_stability_config(stability_source)
-
-    t_phase_weights = fitness_cfg.get("t_phase_weights")
-
-    if not isinstance(t_phase_weights, dict):
-
-        t_phase_weights = {}
-
-    
-
-    steps = int(ga_cfg.get("eval_steps", world_cfg.get("steps", 500)))
-
-    warmup = int(simulate_cfg.get("anti_extinction_warmup_steps", 0))
-
-    die_cap_schedule = simulate_cfg.get("die_cap_schedule")
-
-    die_cap_frac = simulate_cfg.get("post_warmup_die_cap_frac", None)
-
-    late_cleanup_start_frac = max(0.0, min(1.0, float(simulate_cfg.get("late_cleanup_start_frac", 0.8))))
-
-    model = prepare_model(model_cfg)
-
-    checkpoint = torch.load(model_path, map_location="cpu")
-
-    model.load_state_dict(checkpoint)
-
-    model.to(device)
-
-    world = prepare_world(world_cfg, seed)
-
-    viz = build_visualizer(
-
-        cfg=viz_cfg,
-
-        width=world.width,
-
-        height=world.height,
-
-        cell_size=int(viz_cfg.get("cell_px", 24)),
-
-        target_mask=target_mask,
-
-        force_disable=args.no_viz,
-
-    )
-
-    if viz is None and not args.no_viz:
-
-        print("[WARN] Visualization could not be created. Continuing without a window.")
-
-    gif_cfg = viz_cfg.get("gif", {})
-
-    gif_enabled = bool(gif_cfg.get("enabled", False))
-
-    gif_frame_stride = max(1, int(gif_cfg.get("frame_every_steps", max(1, int(viz_cfg.get("render_every_steps", 10))))))
-
-    gif_max_frames = int(gif_cfg.get("max_frames", 300))
-
-    gif_recorder: Optional[GifRecorder] = None
-
-    if gif_enabled:
-
-        gif_recorder = GifRecorder()
-
-        gif_recorder.start_capture(gif_max_frames)
-
-    gif_dir = model_path.parent / "gifs"
-
-    def capture_playback_frame(grid_tensor: torch.Tensor, step_idx: int) -> None:
-
-        if gif_recorder is None:
-
-            return
-
-        try:
-
-            frame = render_grid_to_rgb(grid_tensor, target_mask)
-
-            gif_recorder.capture_frame(frame)
-
-        except Exception as err:  # pragma: no cover - diagnostics only
-
-            print(f"[WARN] Failed to render playback GIF frame at step {step_idx}: {err}")
-
-    sim_result = simulate(
-
-        world=world,
-
-        model=model,
-
-        target_mask=target_mask,
-
-        steps=steps,
-
-        writer=None,
-
-        viz=viz,
-
-        render_every=max(1, int(viz_cfg.get("render_every_steps", 10))),
-
-        device=device,
-
-        anti_extinction_warmup_steps=warmup,
-
-        die_cap_schedule=die_cap_schedule,
-
-        post_warmup_die_cap_frac=die_cap_frac,
-
-        verbose=True,
-
-        frame_capture=capture_playback_frame if gif_recorder is not None else None,
-
-        capture_every=gif_frame_stride,
-
-        late_cleanup_start_frac=late_cleanup_start_frac,
-
-        stability_cfg=stability_cfg if stability_cfg.get("enabled") else None,
-
-    )
-
-    cleanup_ratio = resolve_cleanup_ratio(sim_result, steps, late_cleanup_start_frac)
-
-    if viz is not None:
-
-        viz.close()
-
-    if gif_recorder is not None:
-
-        gif_dir.mkdir(parents=True, exist_ok=True)
-
-        gif_path = gif_dir / "play_best.gif"
-
-        gif_recorder.save_gif(gif_path, fps=int(viz_cfg.get("fps", 20)))
-
-        print(f"[PLAY] Saved GIF: {gif_path}")
-
-    model.to("cpu")
-
-    alpha_fp = float(fitness_cfg.get("alpha_fp", 1.0))
-
-    beta_fn = float(fitness_cfg.get("beta_fn", 0.5))
-
-    gamma_area = float(fitness_cfg.get("gamma_area", 0.15))
-
-    stem_penalty_scale = float(fitness_cfg.get("stem_penalty_scale", 0.05))
-
-    stem_cleanup_multiplier = float(fitness_cfg.get("stem_cleanup_multiplier", 1.0))
-
-    stem_corridor_start_scale = float(fitness_cfg.get("stem_corridor_start_scale", 2.0))
-
-    stem_corridor_end_scale = float(fitness_cfg.get("stem_corridor_end_scale", 1.1))
-
-    t_symmetry_weight = float(fitness_cfg.get("t_symmetry_weight", 0.0))
-
-    t_trunk_weight = float(fitness_cfg.get("t_trunk_weight", 0.0))
-
-    coverage_cfg = fitness_cfg.get("coverage", {})
-
-    coverage_target_floor = float(coverage_cfg.get("target_floor", 0.55))
-
-    coverage_reward_weight = float(coverage_cfg.get("reward_weight", 0.6))
-
-    coverage_penalty_weight = float(coverage_cfg.get("penalty_weight", 1.0))
-
-    sparse_area_floor = float(coverage_cfg.get("area_ratio_floor", 0.6))
-
-    sparse_penalty_weight = float(coverage_cfg.get("area_penalty_weight", 0.8))
-
-    target_area = float(target_mask.to(dtype=torch.bool).sum().item())
-
-    metrics = compute_fitness(
-
-        world.grid,
-
-        target_mask,
-
-        alpha_fp=alpha_fp,
-
-        beta_fn=beta_fn,
-
-        alive_end=sim_result["alive_end"],
-
-        target_area=target_area,
-
-        gamma_area=gamma_area,
-
-        stem_penalty_scale=stem_penalty_scale,
-
-        stem_cleanup_multiplier=stem_cleanup_multiplier,
-
-        stem_cleanup_ratio=cleanup_ratio,
-
-        stem_corridor_start_scale=stem_corridor_start_scale,
-
-        stem_corridor_end_scale=stem_corridor_end_scale,
-
-        t_symmetry_weight=t_symmetry_weight,
-
-        t_trunk_weight=t_trunk_weight,
-
-        stability_metrics=sim_result if stability_cfg.get("enabled") else None,
-
-        t_benchmark_weights=t_phase_weights,
-
-        expect_t_shape=(target_label == "t"),
-
-        coverage_weight=coverage_reward_weight,
-
-        coverage_floor=coverage_target_floor,
-
-        coverage_penalty_weight=coverage_penalty_weight,
-
-        sparse_area_floor=sparse_area_floor,
-
-        sparse_penalty_weight=sparse_penalty_weight,
-
-        t_phase_gate=1.0,
-
-        t_structure_gate=1.0,
-
-        t_cleanliness_gate=1.0,
-
-        collapse_area_floor=empty_collapse_area_floor if target_label == "t" else 0.0,
-
-        collapse_coverage_floor=empty_collapse_coverage_floor if target_label == "t" else 0.0,
-
-        collapse_penalty_weight=empty_collapse_penalty_weight if target_label == "t" else 0.0,
-
-        collapse_bonus_suppression=empty_collapse_suppress_scale if target_label == "t" else 0.0,
-
-    )
-
-    print(
-
-        f"[PLAY] IoU={metrics['iou']:.4f} | total={metrics['fitness']:.4f} | base={metrics['base_score']:.4f} | "
-
-        f"fp={metrics['fp']:.4f} | fn={metrics['fn']:.4f} | alive_bonus={metrics['alive_bonus']:.4f} | "
-
-        f"ext_penalty={metrics['extinction_penalty']:.4f} | area_ab={metrics['area']:.1f}/{target_area:.1f}"
-
-    )
+    _eval_play_best(cfg, args, device, target_mask, seed)
 
 def main() -> None:
 
