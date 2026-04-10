@@ -1,6 +1,36 @@
+# Virtual environment
 .venv/
+
+# Python cache
 __pycache__/
 *.pyc
+*.pyo
+
+# Training artifacts
+runs/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
 $null
 tmp_patch_file
+Thumbs.db
+.DS_Store
+
+# Build
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Claude Code user-local settings (allow/deny lists are personal)
+.claude/settings.local.json
 
