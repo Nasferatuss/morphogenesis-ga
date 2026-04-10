@@ -160,6 +160,78 @@ mypy src/ core/ agents/ --ignore-missing-imports
 
 ---
 
+## Experimental findings locked in 2026-04-10
+
+> ⚠️ Read these before proposing new experiments, HPO sweeps, or ablations.
+> Full details in [`docs/HANDOFF_2026-04-10.md`](docs/HANDOFF_2026-04-10.md),
+> [`docs/leaderboard.md`](docs/leaderboard.md),
+> [`docs/visual_diagnosis_2026-04-10.md`](docs/visual_diagnosis_2026-04-10.md),
+> [`docs/plateau_analysis_2026-04-10.md`](docs/plateau_analysis_2026-04-10.md).
+
+**Current best:** `runs/exp_t_strong_iou_20260410_103312/best.pt` — multi-seed
+mean IoU = **0.339** across 10 world seeds (reach≥0.30 = 100%, reach≥0.40 = 0%).
+Config: [`configs/exp_t_stabilize.yaml`](configs/exp_t_stabilize.yaml).
+
+**Top architectural finding:** `use_position: true` on `LittleLM` (from commit
+`28a56a1`) gives **+124% average IoU** across all 73 historical checkpoints
+(positional models avg 0.290, legacy avg 0.130). Always set it when training
+new models.
+
+**Critical gotchas (learned the hard way):**
+
+1. **Training peak IoU is misleading — always multi-seed benchmark.** Use
+   [`scripts/multiseed_bench.py <checkpoint>`](scripts/multiseed_bench.py).
+   `sweep_a2_*` had training peak 0.375 but MS mean 0.251 (overfit to a lucky
+   training seed). Never declare a champion from training peak alone.
+
+2. **Do NOT "fix" varying `world_seed` in evaluator to be constant per
+   generation.** It looks like a bug (one model, different seeds each gen),
+   but it's a free regularizer. Locking the seed regressed IoU from 0.41 to
+   0.26. See [`docs/experiment_report_2026-04-10.md`](docs/experiment_report_2026-04-10.md) Exp 7.
+
+3. **`t_trunk_weight` is a dead hyperparameter** at the current action space.
+   6-config sweep proved `t15 ≡ t30` bit-identically. GA physically cannot
+   build a T trunk with random-direction `ACTION_DIVIDE`, so the weight never
+   activates. **Exclude from HPO search spaces.**
+
+4. **Adaptive mutation alone is useless without positional encoding.** All 4
+   `ablation_adaptive_*` runs scored MS mean 0.134 — identical to legacy
+   baseline. Positional encoding was the fix, not adaptive mutation. Test
+   adaptive mutation ONLY in combination with `use_position: true`.
+
+5. **Champion regression is real.** Every long run (40+ gens) ends with final
+   IoU lower than peak IoU. The `exp_t_long_champion_20260410_172908` (120
+   gens) peaked at 0.389 @ gen 75 but ended at 0.342 (−0.047) and
+   multi-seed-benchmarked at MS mean 0.325 — **worse** than 40-gen variants.
+   Don't train longer hoping to break the ceiling. Longer ≠ better.
+
+6. **Structural bar-vs-trunk dilemma is the real ceiling.** No checkpoint in
+   project history achieves both the T horizontal bar and the vertical trunk
+   simultaneously — they require opposing growth strategies. This is the
+   0.40 MS IoU ceiling. **Unblocking requires directional divide actions**
+   (`ACTION_DIVIDE_N/S/E/W` in `src/world.py`) — a `world.py` + `model.py`
+   change, blocked only until the parallel refactor session agrees.
+
+**Champion config recipe that works:**
+- `use_position: true`
+- `alpha_fp: 2.5`, `beta_fn: 2.0`, `gamma_area: 0.5`
+- `steps: 200` (NOT 400 — overflow returns)
+- 3-phase `die_cap_schedule`: grow (0.20) → shape (0.40) → **gentle** clean (0.35, NOT 0.85)
+- `late_cleanup_start_frac: 0.75`
+- ~40 generations is enough; plateau_patience ≥ 40
+
+**Convergence speed by `alpha_fp`** (from 6-config sweep plateau analysis):
+- `alpha_fp=2.0` → peak gen 16 (don't run > 25 gens, waste)
+- `alpha_fp=2.5` → peak gen 28 (current sweet spot)
+- `alpha_fp=3.0` → peak gen 38 (but −19% regression after peak)
+
+**Reusable analysis scripts** (for the next session / HPO winner validation):
+- `scripts/multiseed_bench.py` — standalone multi-seed IoU benchmark
+- `scripts/build_leaderboard.py` — ranks every `runs/*/best.pt` by MS mean
+- `scripts/dump_grid.py` — ASCII visualization of a model's final grid
+
+---
+
 ## Roadmap (source of truth: Notion)
 
 **Canonical page:** [🌍 Дорожная карта]([redacted])
