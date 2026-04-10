@@ -20,6 +20,10 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import torch
 
+from agents.train_agent.adaptive_mutation import (
+    AdaptiveMutationConfig,
+    adapt_mutation_std,
+)
 from agents.train_agent.mutation import (
     TMutationConfig,
 )
@@ -303,6 +307,10 @@ def train_ga(
     mutation_prob = float(ga_cfg.get("mutation_prob", 0.1))
 
     mutation_std = float(ga_cfg.get("mutation_std", 0.01))
+
+    adaptive_mutation_cfg = AdaptiveMutationConfig.from_dict(
+        ga_cfg.get("adaptive_mutation")
+    )
 
     n_elites_unchanged = max(0, int(ga_cfg.get("n_elites_unchanged", 4)))
 
@@ -2449,6 +2457,38 @@ def train_ga(
 
             if phase_is_t:
                 current_mutation_std = min(current_mutation_std, t_mutation_std_cap)
+
+            # Adaptive mutation — only fires if ga.adaptive_mutation.strategy != "none"
+            # (default). Applied AFTER all hand-tuned caps so it can only boost σ,
+            # not override existing safety limits. For the reproducibility freeze
+            # (configs/reproducibility_freeze_v1.yaml) this is a strict passthrough.
+            current_mutation_std, _adaptive_diag = adapt_mutation_std(
+                current_mutation_std,
+                fitnesses=fitnesses,
+                gens_since_improve=gens_since_improve,
+                cfg=adaptive_mutation_cfg,
+            )
+            if writer is not None and adaptive_mutation_cfg.strategy != "none":
+                writer.add_scalar(
+                    "ga/adaptive_mutation_std",
+                    float(_adaptive_diag["adjusted_std"]),
+                    global_step=global_gen,
+                )
+                writer.add_scalar(
+                    "ga/fitness_variance",
+                    float(_adaptive_diag["variance"]),
+                    global_step=global_gen,
+                )
+                writer.add_scalar(
+                    "ga/adaptive_diversity_fired",
+                    1 if _adaptive_diag["diversity_boost_applied"] else 0,
+                    global_step=global_gen,
+                )
+                writer.add_scalar(
+                    "ga/adaptive_plateau_fired",
+                    1 if _adaptive_diag["plateau_boost_applied"] else 0,
+                    global_step=global_gen,
+                )
 
             best_idx = int(max(range(len(fitnesses)), key=lambda idx: fitnesses[idx]))
 
