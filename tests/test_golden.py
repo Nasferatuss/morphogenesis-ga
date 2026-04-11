@@ -19,12 +19,12 @@ import torch
 from agents.train_agent.pipeline import train_ga
 from core.services.config_loader import load_config
 from src.fitness import compute_fitness, compute_iou
-from src.ga import clone_model, crossover, init_population, mutate, select_elite
+from src.ga import crossover, init_population, mutate, select_elite
 from src.model import LittleLM
 from src.simulate import simulate
 from src.targets import make_target, make_target_T, make_target_cross
 from src.utils import set_seed
-from src.world import CELL_A, CELL_B, CELL_STEM, World
+from src.world import CELL_A, World
 
 
 @pytest.mark.golden
