@@ -1,0 +1,111 @@
+# HPO winner v1 — 2026-04-11
+# ============================================================================
+# New champion: trial 17 from HPO sweep v2_real_25trials (2026-04-10 evening).
+# Multi-seed benchmark (10 seeds): mean IoU = 0.4254, max = 0.4815,
+# reach>=0.40 = 80%. This is the first config in project history to BREAK
+# the 0.40 architectural ceiling that HANDOFF_2026-04-10.md declared
+# impossible without directional divide actions.
+#
+# PROVENANCE:
+# - Base:         configs/hpo/real_base.yaml (derived from exp_t_stabilize)
+# - Search space: configs/hpo/search_space_v2.yaml (12 params)
+# - Sweep:        runs/hpo/v2_real_25trials/ (25 trials, ~8h 14m on RTX 4070)
+# - Trial ID:     17 (out of 25)
+# - Sweep obj:    0.40117 multi_seed_iou at 5 seeds
+# - MS 10 re-val: 0.4254 mean, 0.4815 max, 80% reach≥0.40
+#
+# GAP vs previous leaderboard:
+# - Previous #1 (exp_t_strong_iou MS 0.339): +25.5% improvement
+# - Historical best-ever (0.256 across 58 pre-HPO runs): +66%
+# - Gap to #2 in THIS sweep (0.3404): +25% (winner is an outlier, not a cluster)
+#
+# DELTAS vs configs/hpo/real_base.yaml (all from trial 17 best_params.yaml):
+# - world.steps:                        200 → 250      (upper bound of search)
+# - ga.mutation_prob:                   0.15 → 0.2565  (+71%)
+# - ga.mutation_std:                    0.025 → 0.0380 (+52%)
+# - ga.elite_frac:                      0.20 → 0.2849  (+42%)
+# - fitness.alpha_fp:                   2.5 → 2.8779   (+15%)
+# - fitness.beta_fn:                    2.0 → 1.7696   (−11%)
+# - fitness.gamma_area:                 0.5 → 0.2924   (−42%) ← surprising
+# - fitness.stem_penalty_scale:         0.12 → 0.1271  (≈ same)
+# - ga.late_t_guard.penalty:            2.7 → 3.1991   (+19%)
+# - simulate.late_cleanup_start_frac:   0.75 → 0.6522  (−13%)
+# - ga.adaptive_mutation.strategy:      (none) → none  (kept none)
+# - ga.adaptive_mutation.plateau_boost: (n/a) → 0.0145 (unused since strategy=none)
+#
+# BIGGEST SURPRISE: gamma_area dropped from 0.5 to 0.29. The old config was
+# over-penalising area deviations. Loosening gamma_area let the GA explore
+# configurations that slightly overshoot the 25-cell target, which appears
+# to allow trunk cells to emerge occasionally — which is how we broke 0.40.
+#
+# NOTES FOR NEXT SWEEP v3:
+# - world.steps hit upper bound 250 → widen to [200, 400] in v3
+# - ga.mutation_prob hit 0.256 (close to 0.3 upper bound) → widen to [0.1, 0.4]
+# - ga.mutation_std hit 0.038 (mid-range) → search worked, keep [0.005, 0.05]
+# - adaptive_mutation.strategy → DELETE from v3 (proven dead in v2)
+# - adaptive_mutation.plateau_boost → DELETE from v3 (idem)
+# - gamma_area deserves its own focused sweep [0.1, 0.5]
+# ============================================================================
+seed: 42
+world:
+  width: 15
+  height: 15
+  init_cells: 50
+  steps: 250                  # HPO winner: was 200
+target:
+  name: "T"
+model:
+  embed_dim: 32
+  heads: 4
+  use_position: true          # CRITICAL post-HANDOFF finding
+simulate:
+  anti_extinction_warmup_steps: 25
+  late_cleanup_start_frac: 0.6522070426613739  # HPO winner: was 0.75
+  die_cap_schedule:
+    - until_step: 60
+      cap_frac: 0.20
+    - until_step: 130
+      cap_frac: 0.40
+    - until_step: 999999
+      cap_frac: 0.35
+viz:
+  mode: pygame
+  render_every_steps: 5
+  cell_px: 28
+  fps: 20
+  gif:
+    enabled: false
+device:
+  prefer: cuda
+logging:
+  run_name: curriculum_hpo_v1
+ga:
+  enabled: true
+  population_size: 48
+  generations: 30              # same as real_base (HPO swept within 30 gen)
+  elite_frac: 0.28492230804934204   # HPO winner: was 0.20
+  mutation_prob: 0.2565310685432164  # HPO winner: was 0.15
+  mutation_std: 0.03802556295987558  # HPO winner: was 0.025
+  n_elites_unchanged: 6
+  eval_steps: 250             # matches world.steps
+  viz_every_generations: 30
+  checkpoint_every_generations: 20
+  plateau_generations: 25
+  plateau_min_delta: 0.002
+  late_t_guard:
+    enabled: true
+    penalty: 3.1990746920548645     # HPO winner: was 2.7
+    # Other late_t_guard fields kept at real_base defaults (not swept)
+  adaptive_mutation:
+    strategy: none              # HPO winner: confirmed `none` beats alternatives
+    plateau_boost: 0.014521759645384918  # unused since strategy=none
+fitness:
+  alpha_fp: 2.8779088123178385   # HPO winner: was 2.5
+  beta_fn: 1.7696481047990356    # HPO winner: was 2.0
+  gamma_area: 0.29235986259409746  # HPO winner: was 0.5 (KEY FINDING)
+  stem_penalty_scale: 0.1270545140136733  # HPO winner: was 0.12
+  stem_cleanup_multiplier: 1.5
+  stem_corridor_start_scale: 2.0
+  stem_corridor_end_scale: 1.1
+  t_symmetry_weight: 0.03
+  t_trunk_weight: 0.20
