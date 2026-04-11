@@ -39,6 +39,7 @@ if str(_REPO_ROOT) not in sys.path:
 import yaml  # noqa: E402
 
 from agents.train_agent.pipeline import train_ga  # noqa: E402
+from core.memory.mlflow_tracker import MLflowConfig, MLflowTracker  # noqa: E402
 from core.services.hpo import (  # noqa: E402
     VALID_OBJECTIVES,
     load_search_space,
@@ -101,6 +102,27 @@ def parse_args() -> argparse.Namespace:
             "docs/leaderboard.md methodology."
         ),
     )
+    parser.add_argument(
+        "--mlflow",
+        action="store_true",
+        help=(
+            "Enable MLflow experiment tracking for the sweep. Overrides "
+            "`logging.mlflow.enabled` from the base config. Requires "
+            "`pip install mlflow>=2.15`. When enabled, the sweep creates "
+            "one parent run (per study) with one nested run per trial, "
+            "logging params + objective + elapsed time."
+        ),
+    )
+    parser.add_argument(
+        "--mlflow-experiment",
+        type=str,
+        default=None,
+        help=(
+            "Override the MLflow experiment name. Defaults to "
+            "'morphogenesis-ga-hpo' or whatever `logging.mlflow."
+            "experiment_name` says in the base config."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -142,6 +164,25 @@ def main() -> None:
     study_dir = args.output_root / study_name
     study_dir.mkdir(parents=True, exist_ok=True)
 
+    # ---- MLflow tracker ----
+    # Priority: CLI --mlflow overrides YAML; --mlflow-experiment overrides
+    # YAML experiment name. If mlflow package is missing, the tracker
+    # silently no-ops (see core/memory/mlflow_tracker.py for soft-dep
+    # semantics). Inactive tracker adds zero overhead to the sweep.
+    mlflow_cfg_dict = dict(base_cfg.get("logging", {}).get("mlflow") or {})
+    if args.mlflow:
+        mlflow_cfg_dict["enabled"] = True
+    if args.mlflow_experiment:
+        mlflow_cfg_dict["experiment_name"] = args.mlflow_experiment
+    elif "experiment_name" not in mlflow_cfg_dict:
+        mlflow_cfg_dict["experiment_name"] = "morphogenesis-ga-hpo"
+    mlflow_tags = dict(mlflow_cfg_dict.get("tags") or {})
+    mlflow_tags.setdefault("study_name", study_name)
+    mlflow_tags.setdefault("search_space", args.search_space.name)
+    mlflow_tags.setdefault("objective", args.objective)
+    mlflow_cfg_dict["tags"] = mlflow_tags
+    mlflow_tracker = MLflowTracker(MLflowConfig.from_dict(mlflow_cfg_dict))
+
     print(f"[HPO] study_name={study_name}")
     print(f"[HPO] base_config={args.base_config}")
     print(f"[HPO] search_space={args.search_space} ({len(specs)} params)")
@@ -151,6 +192,10 @@ def main() -> None:
     print(f"[HPO] device={device}")
     print(f"[HPO] output={study_dir}")
     print(f"[HPO] target={target_name} target_area={target_area:.1f}")
+    if mlflow_tracker.config.enabled:
+        print(
+            f"[HPO] mlflow=enabled experiment={mlflow_tracker.config.experiment_name}"
+        )
 
     sampler = optuna.samplers.TPESampler(seed=args.sampler_seed)
     study = optuna.create_study(
@@ -184,22 +229,54 @@ def main() -> None:
             f"[HPO] trial {trial.number:4d}  obj={value:.6f}  "
             f"elapsed={elapsed:6.1f}s"
         )
+        # MLflow: log trial as nested run under the parent sweep run.
+        # Silent no-op if tracker is disabled / mlflow unavailable.
+        with mlflow_tracker.start_run(
+            run_name=f"trial_{trial.number:04d}", nested=True
+        ):
+            mlflow_tracker.log_params(params)
+            mlflow_tracker.log_metric(args.objective, value)
+            mlflow_tracker.log_metric("elapsed_s", elapsed)
+            mlflow_tracker.set_tag("trial_number", str(trial.number))
         return value
 
     start_total = time.time()
-    try:
-        study.optimize(
-            objective_fn,
-            n_trials=args.n_trials,
-            timeout=args.timeout,
-            gc_after_trial=True,
-            show_progress_bar=False,
+    # Wrap the entire study in an MLflow parent run so nested trials
+    # group cleanly under it. When mlflow is disabled this is a no-op.
+    with mlflow_tracker.start_run(run_name=study_name):
+        mlflow_tracker.log_params(
+            {
+                "n_trials": args.n_trials,
+                "sampler": "TPE",
+                "sampler_seed": args.sampler_seed,
+                "base_config": str(args.base_config),
+                "search_space": str(args.search_space),
+                "multi_seed": args.multi_seed,
+                "objective": args.objective,
+            }
         )
-    except KeyboardInterrupt:
-        print("[HPO] Interrupted — writing partial results...")
+        try:
+            study.optimize(
+                objective_fn,
+                n_trials=args.n_trials,
+                timeout=args.timeout,
+                gc_after_trial=True,
+                show_progress_bar=False,
+            )
+        except KeyboardInterrupt:
+            print("[HPO] Interrupted — writing partial results...")
 
-    total_elapsed = time.time() - start_total
-    print(f"[HPO] Total elapsed: {total_elapsed:.1f}s")
+        total_elapsed = time.time() - start_total
+        print(f"[HPO] Total elapsed: {total_elapsed:.1f}s")
+        mlflow_tracker.log_metric("total_elapsed_s", total_elapsed)
+        mlflow_tracker.log_metric(
+            "n_trials_completed",
+            sum(1 for t in study.trials if t.value is not None),
+        )
+        # Log study-level best value if we have one
+        completed_vals = [t.value for t in study.trials if t.value is not None]
+        if completed_vals:
+            mlflow_tracker.log_metric("best_value", max(completed_vals))
 
     # ---- Write artefacts ----
     trials_csv = study_dir / "trials.csv"
@@ -258,6 +335,20 @@ def main() -> None:
                 print(f"[HPO] Importance computation failed: {err}")
     else:
         print("[HPO] No completed trials — nothing to summarise.")
+
+    # MLflow: log all written artefacts under a dedicated "artefacts"
+    # run so they're downloadable from the UI later. This is a second
+    # parent run because the main one already exited; the nested
+    # trials still reference the first run by name. In practice users
+    # view the main run for trial history and the artefacts run for
+    # sweep-level outputs.
+    if mlflow_tracker.config.enabled:
+        with mlflow_tracker.start_run(run_name=f"{study_name}__artefacts"):
+            mlflow_tracker.log_artifact(study_dir / "trials.csv")
+            if (study_dir / "best_params.yaml").exists():
+                mlflow_tracker.log_artifact(study_dir / "best_params.yaml")
+            if (study_dir / "importance.csv").exists():
+                mlflow_tracker.log_artifact(study_dir / "importance.csv")
 
     print(f"[HPO] Artefacts: {study_dir}")
 
