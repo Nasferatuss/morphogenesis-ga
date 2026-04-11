@@ -326,3 +326,185 @@ class TestGoldenBaselineV1:
                 f"gen {row['generation']}: hold_score {hold} != 0 — "
                 "baseline should have zero stabilization (see baseline_v1.md §Known limitations)"
             )
+
+
+# ---------------------------------------------------------------------------
+# Baseline v2 — post-HPO reproducibility freeze (captured 2026-04-11)
+# ---------------------------------------------------------------------------
+#
+# These values are the deterministic per-generation metrics produced by
+# ``configs/reproducibility_freeze_v2.yaml`` with seed 42 on CUDA
+# (RTX 4070 Laptop GPU) with torch 2.5.1+cu121 AFTER the HPO seed bug
+# fix. Freeze v1 captures the pre-positional 6-gen smoke curriculum;
+# freeze v2 captures the post-HPO 30-gen positional training with the
+# HPO winner knobs.
+#
+# Tolerance: 1e-6 (looser than v1's 1e-9). CUDA atomic reductions can
+# introduce sub-1e-6 floating-point jitter across runs on different
+# hardware or driver versions; we observed bit-identical output across
+# three consecutive runs on the capture machine but 1e-6 leaves room
+# for future CUDA stack updates.
+#
+# Runtime: ~22 minutes on RTX 4070 Laptop GPU. Marked @slow AND @cuda
+# so CPU-only CI skips it. Local developers with GPU run it explicitly
+# via `pytest tests/test_golden.py::TestGoldenBaselineV2 -v -m slow`.
+#
+# See docs/benchmarks/baseline_v2.md for the full scoreboard, the
+# RNG postmortem that led to this freeze, and the version-bump procedure.
+
+BASELINE_V2_EXPECTED = [
+    # (generation, phase, best_fitness, best_iou, mean_fitness)
+    (1, 'phase_T', -1.002571263977615, 0.14545454545454545, -2.055247747178336),
+    (2, 'phase_T', -0.9658851286043215, 0.16981132075471697, -1.9224967991066062),
+    (3, 'phase_T', -0.4306349671888501, 0.1891891891891892, -1.8787117832974485),
+    (4, 'phase_T', -0.41084563580085287, 0.20833333333333334, -1.8305809067047438),
+    (5, 'phase_T', -0.28486387997390794, 0.20454545454545456, -1.7995237825454151),
+    (6, 'phase_T', -0.1325265583785792, 0.25, -1.8662394774775037),
+    (7, 'phase_T', -0.5041690805951679, 0.19047619047619047, -1.6357352640732914),
+    (8, 'phase_T', -0.19649430961180414, 0.23529411764705882, -1.5672636264634996),
+    (9, 'phase_T', -0.10641064477272572, 0.25, -1.1937010300877242),
+    (10, 'phase_T', 0.3065936729625177, 0.3076923076923077, -0.6916428110996066),
+    (11, 'phase_T', 0.29459542868607796, 0.30952380952380953, -0.6812389618633868),
+    (12, 'phase_T', 0.37947670778400533, 0.32558139534883723, -0.7115268170216608),
+    (13, 'phase_T', 0.21038859162527634, 0.2857142857142857, -0.563447563388705),
+    (14, 'phase_T', 0.47453712955023963, 0.34210526315789475, -0.572014568341197),
+    (15, 'phase_T', 0.44096615831883956, 0.3333333333333333, -0.38820086356359607),
+    (16, 'phase_T', 0.39155502044561363, 0.3181818181818182, -0.46914759030018566),
+    (17, 'phase_T', 0.3823229496528662, 0.325, -0.21709512445194043),
+    (18, 'phase_T', 0.4776140526271627, 0.34210526315789475, -0.3689297593970975),
+    (19, 'phase_T', 0.49359552750420377, 0.34146341463414637, -0.5020929457641673),
+    (20, 'phase_T', 0.5980575985055545, 0.3684210526315789, -0.526077627580511),
+    (21, 'phase_T', 0.44576698298159145, 0.3333333333333333, -0.446960699994188),
+    (22, 'phase_T', 0.4806909757040858, 0.34210526315789475, -0.34946238565690213),
+    (23, 'phase_T', 0.447347924700606, 0.3333333333333333, -0.3716918097582706),
+    (24, 'phase_T', 0.4822294372425473, 0.34210526315789475, -0.442649793780906),
+    (25, 'phase_T', 0.48299866801177804, 0.34210526315789475, -0.3654128075612652),
+    (26, 'phase_T', 0.5677556509794768, 0.358974358974359, -0.34814278125401427),
+    (27, 'phase_T', 0.483627248530059, 0.34210526315789475, -0.4725456514033108),
+    (28, 'phase_T', 0.5189468378414285, 0.35135135135135137, -0.40910714684861943),
+    (29, 'phase_T', 0.5673984247435799, 0.358974358974359, -0.41690026190534385),
+    (30, 'phase_T', 0.6024771559917291, 0.3684210526315789, -0.29187630607127696),
+]
+
+
+@pytest.mark.golden
+@pytest.mark.slow
+@pytest.mark.cuda
+class TestGoldenBaselineV2:
+    """Reproducibility baseline v2 — post-HPO positional 30-gen anchor.
+
+    This class runs ``configs/reproducibility_freeze_v2.yaml`` end-to-end
+    (~22 min on RTX 4070) and asserts every per-generation
+    ``best_fitness``, ``best_iou``, and ``mean_fitness`` matches the
+    2026-04-11 freeze at tolerance 1e-6.
+
+    Unlike v1 (CPU-only, 1e-9 tolerance), v2 uses CUDA for the LittleLM
+    forward pass. The tolerance is relaxed to 1e-6 to allow for potential
+    CUDA atomic-reduction jitter on different hardware or driver
+    versions — we observed bit-identical output across three consecutive
+    runs on the capture machine, but this test must survive future
+    PyTorch/CUDA stack updates.
+
+    Marked @slow AND @cuda so:
+    - CPU-only CI skips it (no GPU available)
+    - `pytest -m "not slow"` fast-path developers skip it
+    - Explicit runs use `pytest -m slow` (local dev with GPU) or
+      `pytest -m "slow and cuda"` (GPU CI lane)
+
+    Why it lives in test_golden.py: same rationale as V1 — this is a
+    regression guard for the full train_ga pipeline, just on the
+    post-HPO positional config instead of the pre-positional smoke.
+    """
+
+    @pytest.fixture(scope="class")
+    def _baseline_v2_cuda_available(self) -> bool:
+        """Skip gracefully if CUDA isn't available at runtime."""
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA not available — baseline v2 requires GPU")
+        return True
+
+    @pytest.fixture(scope="class")
+    def baseline_run(
+        self, _baseline_v2_cuda_available: bool, tmp_path_factory
+    ) -> list[dict]:
+        """Run the frozen config once per class and return parsed generations.csv."""
+        import csv
+
+        run_root = tmp_path_factory.mktemp("baseline_v2_run")
+        import os
+        cwd = os.getcwd()
+        os.chdir(run_root)
+        try:
+            cfg = load_config(
+                str(Path(cwd) / "configs" / "reproducibility_freeze_v2.yaml")
+            )
+            args = argparse.Namespace(no_viz=True, steps=None, train_ga=True)
+            target_mask = make_target("T", 15, 15)
+            target_area = float(target_mask.sum().item())
+            set_seed(int(cfg.get("seed", 42)))
+            best_path = train_ga(
+                cfg,
+                args,
+                torch.device("cuda"),
+                target_mask,
+                seed=int(cfg.get("seed", 42)),
+                default_target_name="T",
+                default_target_area=target_area,
+            )
+            run_dir = best_path.parent
+            with (run_dir / "generations.csv").open() as f:
+                return list(csv.DictReader(f))
+        finally:
+            os.chdir(cwd)
+
+    def test_row_count(self, baseline_run):
+        """Baseline v2 produces exactly 30 generations (all phase_T, HPO winner cfg)."""
+        assert len(baseline_run) == len(BASELINE_V2_EXPECTED) == 30
+
+    @pytest.mark.parametrize(
+        "expected",
+        BASELINE_V2_EXPECTED,
+        ids=[f"gen{g:02d}" for g, *_ in BASELINE_V2_EXPECTED],
+    )
+    def test_generation_metrics_anchored(self, baseline_run, expected):
+        """Every generation's best_fitness, best_iou, and mean_fitness match freeze v2."""
+        exp_gen, exp_phase, exp_best_fit, exp_best_iou, exp_mean_fit = expected
+        row = next(
+            (r for r in baseline_run if int(r["generation"]) == exp_gen), None
+        )
+        assert row is not None, f"missing row for gen {exp_gen}"
+        assert row["phase"] == exp_phase, (
+            f"gen {exp_gen} phase drifted: {row['phase']} != {exp_phase}"
+        )
+        # Float comparisons use 1e-6 tolerance (CUDA atomic reductions
+        # may introduce sub-1e-6 jitter). See baseline_v2.md §Known
+        # limitations for rationale.
+        assert float(row["best_fitness"]) == pytest.approx(exp_best_fit, abs=1e-6), (
+            f"gen {exp_gen} best_fitness drifted: {row['best_fitness']} vs {exp_best_fit}"
+        )
+        assert float(row["best_iou"]) == pytest.approx(exp_best_iou, abs=1e-6), (
+            f"gen {exp_gen} best_iou drifted: {row['best_iou']} vs {exp_best_iou}"
+        )
+        assert float(row["mean_fitness"]) == pytest.approx(exp_mean_fit, abs=1e-6), (
+            f"gen {exp_gen} mean_fitness drifted: {row['mean_fitness']} vs {exp_mean_fit}"
+        )
+
+    def test_best_overall_gen20_or_gen30(self, baseline_run):
+        """Best IoU tied at gen 20 and gen 30 (0.3684) — confirms plateau reached."""
+        best = max(baseline_run, key=lambda r: float(r["best_iou"]))
+        assert int(best["generation"]) in (20, 30), (
+            f"unexpected best gen: {best['generation']}"
+        )
+        assert float(best["best_iou"]) == pytest.approx(
+            0.3684210526315789, abs=1e-6
+        )
+
+    def test_no_stabilization_in_freeze_v2(self, baseline_run):
+        """Baseline v2 also never triggers stability layer (no hold_score > 0)."""
+        for row in baseline_run:
+            hold = row.get("hold_score") or "0"
+            assert float(hold) == 0.0, (
+                f"gen {row['generation']}: hold_score {hold} != 0 — "
+                "baseline v2 should have zero stabilization "
+                "(see baseline_v2.md §Known limitations)"
+            )

@@ -368,6 +368,23 @@ def run_trial(
     import argparse
     import os
 
+    # Re-seed per trial so each trial starts from a clean RNG state.
+    # Without this, trial N's training path depends on the cumulative
+    # RNG state left behind by trials 0..N-1 (the Optuna sampler only
+    # set_seed's once at study start), which made winners
+    # un-reproducible from their frozen config alone — you had to
+    # replay the entire sweep to hit the exact same RNG sequence.
+    # Fixed 2026-04-11 after a baseline v2 bump investigation caught
+    # the bug: trial 17 of v2_real_25trials scored MS 0.4254 during
+    # the sweep but a direct re-train from its frozen config scored
+    # MS 0.3290 on a clean set_seed(42). The import is local so this
+    # module stays importable in environments without torch.
+    try:
+        from src.utils import set_seed  # noqa: PLC0415
+        set_seed(seed)
+    except Exception as err:  # pragma: no cover - diagnostics
+        print(f"[HPO] set_seed({seed}) failed: {err}")
+
     # Resolve params against base cfg. For multi_seed_iou we also need
     # the post-override cfg to pass into the benchmark (so world.steps
     # / late_cleanup_start_frac overrides are respected during eval).

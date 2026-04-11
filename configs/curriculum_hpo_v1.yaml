@@ -1,10 +1,36 @@
 # HPO winner v1 — 2026-04-11
 # ============================================================================
-# New champion: trial 17 from HPO sweep v2_real_25trials (2026-04-10 evening).
+# ⚠️ POST-MORTEM NOTE (added 2026-04-11 after baseline v2 bump investigation):
+#
+# This config captures the parameter values that HPO trial 17 was seeded
+# with during the v2_real_25trials sweep. At sweep time, trial 17's
+# training produced a checkpoint that benches to MS-10 mean 0.4254.
+#
+# HOWEVER: `core/services/hpo.py::run_trial` had a seed-initialization
+# bug (fixed 2026-04-11 in the same commit that added this note) — it
+# called `set_seed()` only once per study, so trial 17's RNG state was
+# influenced by the 17 prior trials, not deterministically set from
+# config+seed alone.
+#
+# AS A RESULT, re-training from THIS config with a clean `set_seed(42)`
+# reaches MS-10 mean 0.3290, NOT 0.4254. The 0.4254 checkpoint is
+# preserved as `runs/champion_hpo_v1/best.pt` but is NOT reproducible
+# from config alone.
+#
+# If you need a reproducible reference, use
+# `configs/reproducibility_freeze_v2.yaml` and `docs/benchmarks/baseline_v2.md`
+# instead. That freeze locks the CLEAN-SEED behaviour (0.3290 MS-10).
+#
+# This file is kept as a historical record of HPO winner knobs, not as
+# a recommended training config. See
+# `docs/research/hpo_v2_report.md` § "2026-04-11 RNG postmortem" for
+# the full story.
+# ============================================================================
+#
+# SWEEP-TIME CLAIMS (not reproducible, see postmortem above):
 # Multi-seed benchmark (10 seeds): mean IoU = 0.4254, max = 0.4815,
-# reach>=0.40 = 80%. This is the first config in project history to BREAK
-# the 0.40 architectural ceiling that HANDOFF_2026-04-10.md declared
-# impossible without directional divide actions.
+# reach>=0.40 = 80%. At sweep time this broke the 0.40 ceiling that
+# HANDOFF_2026-04-10.md declared structural.
 #
 # PROVENANCE:
 # - Base:         configs/hpo/real_base.yaml (derived from exp_t_stabilize)
@@ -87,15 +113,21 @@ ga:
   mutation_prob: 0.2565310685432164  # HPO winner: was 0.15
   mutation_std: 0.03802556295987558  # HPO winner: was 0.025
   n_elites_unchanged: 6
-  eval_steps: 250             # matches world.steps
+  eval_steps: 200             # same as real_base (HPO did NOT sweep this; world.steps=250 is a dead knob per pipeline.py:317)
   viz_every_generations: 30
   checkpoint_every_generations: 20
   plateau_generations: 25
   plateau_min_delta: 0.002
   late_t_guard:
-    enabled: true
-    penalty: 3.1990746920548645     # HPO winner: was 2.7
-    # Other late_t_guard fields kept at real_base defaults (not swept)
+    # NOTE: during the HPO sweep this block held only `{penalty: 3.199}`
+    # WITHOUT `enabled: true`, which means the guard was DISABLED at
+    # training time (late_t_guard_enabled = bool(cfg.get("enabled", False))
+    # per agents/train_agent/pipeline.py). HPO was effectively tuning a
+    # dead knob. To keep this config bit-identical to what trial 17
+    # actually saw, we match that: penalty only, no enabled. Do NOT add
+    # `enabled: true` — it will change fitness calculation and invalidate
+    # the tie to the original sweep results.
+    penalty: 3.1990746920548645     # HPO swept value (dead knob)
   adaptive_mutation:
     strategy: none              # HPO winner: confirmed `none` beats alternatives
     plateau_boost: 0.014521759645384918  # unused since strategy=none

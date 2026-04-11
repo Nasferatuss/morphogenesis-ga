@@ -66,4 +66,5 @@ addopts = "-v --tb=short"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "golden: golden regression tests",
+    "cuda: tests that require CUDA (skipped on CPU-only machines)",
 ]
