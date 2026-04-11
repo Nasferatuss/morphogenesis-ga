@@ -20,6 +20,7 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import torch
 
+from agents.train_agent import mini_transfer as _mini_transfer_module
 from agents.train_agent.adaptive_mutation import (
     AdaptiveMutationConfig,
     adapt_mutation_std,
@@ -1032,193 +1033,59 @@ def train_ga(
 
             update_status("training", global_gen)
 
+    # Mini-transfer evaluation (cross-seed candidate robustness) was
+    # extracted to agents/train_agent/mini_transfer.py. The context
+    # dataclass is built lazily below — AFTER scale_t_weights_values()
+    # is defined — so transfer_weights can be computed using the
+    # current t-weight scaling state at call time. The original closure
+    # captured 30+ variables; consolidating them into a dataclass makes
+    # the extraction testable without passing a 30-arg signature.
     def run_mini_transfer_eval(candidate_indices: List[int]) -> Optional[Dict[str, Any]]:
-
-        if not candidate_indices:
-
-            return None
-
         transfer_weights = scale_t_weights_values(
-
             geometry_late_structure_boost,
-
             geometry_late_penalty_boost,
-
             geometry_late_cleanliness_boost,
-
         )
-
-        summary_results: List[Dict[str, Any]] = []
-
-        stability_cfg_eval = train_stability_cfg if train_stability_cfg.get("enabled") else None
-
-        for cand_idx in candidate_indices:
-
-            candidate = population[cand_idx]
-
-            candidate_model = clone_model(candidate)
-
-            candidate_model.to(device)
-
-            best_ious: List[float] = []
-
-            final_ious: List[float] = []
-
-            success_flags: List[float] = []
-
-            for seed_val in mini_transfer_seeds:
-
-                transfer_world = prepare_world(world_cfg, int(seed_val))
-
-                sim_result = simulate(
-
-                    world=transfer_world,
-
-                    model=candidate_model,
-
-                    target_mask=default_target_mask,
-
-                    steps=mini_transfer_eval_steps,
-
-                    writer=None,
-
-                    viz=None,
-
-                    render_every=mini_transfer_eval_steps,
-
-                    device=device,
-
-                    anti_extinction_warmup_steps=warmup,
-
-                    die_cap_schedule=die_cap_schedule,
-
-                    post_warmup_die_cap_frac=die_cap_frac,
-
-                    verbose=False,
-
-                    late_cleanup_start_frac=late_cleanup_start_frac,
-
-                    stability_cfg=stability_cfg_eval,
-
-                )
-
-            metrics = compute_fitness(
-
-                transfer_world.grid,
-
-                default_target_mask,
-
-                alpha_fp=alpha_fp,
-
-                beta_fn=beta_fn,
-
-                alive_end=sim_result["alive_end"],
-
-                target_area=default_target_area,
-
-                gamma_area=gamma_area,
-
-                stem_penalty_scale=stem_penalty_scale,
-
-                stem_cleanup_multiplier=stem_cleanup_multiplier,
-
-                stem_cleanup_ratio=sim_result.get("late_cleanup_ratio", 0.0),
-
-                stem_corridor_start_scale=stem_corridor_start_scale,
-
-                stem_corridor_end_scale=stem_corridor_end_scale,
-
-                t_symmetry_weight=t_symmetry_weight,
-
-                t_trunk_weight=t_trunk_weight,
-
-                clean_component_weight=clean_component_target,
-
-                clean_fp_weight=clean_fp_target,
-
-                stability_metrics=sim_result if stability_cfg_eval else None,
-
-                t_benchmark_weights=transfer_weights,
-
-                expect_t_shape=(default_target_label == "t"),
-
-                coverage_weight=coverage_reward_weight,
-
-                coverage_floor=coverage_target_floor,
-
-                coverage_penalty_weight=coverage_penalty_weight,
-
-                sparse_area_floor=sparse_area_floor,
-
-                sparse_penalty_weight=sparse_penalty_weight,
-
-                t_phase_gate=1.0,
-
-                t_structure_gate=1.0,
-
-                t_cleanliness_gate=1.0,
-
-                collapse_area_floor=0.0,
-
-                collapse_coverage_floor=0.0,
-
-                collapse_penalty_weight=0.0,
-
-                collapse_bonus_suppression=0.0,
-
-            )
-
-            best_ious.append(float(sim_result.get("best_iou", metrics["iou"])))
-
-            final_ious.append(float(metrics["iou"]))
-
-            success_flags.append(1.0 if metrics.get("stabilized_success") else 0.0)
-
-            candidate_model.to("cpu")
-
-            mean_best = _simple_mean(best_ious)
-
-            mean_final = _simple_mean(final_ious)
-
-            variance = _simple_variance(final_ious)
-
-            success_rate = _simple_mean(success_flags)
-
-            mini_score = mean_final + 0.5 * mean_best + 0.5 * success_rate - 0.3 * variance
-
-            summary_results.append(
-
-                {
-
-                    "candidate_index": cand_idx,
-
-                    "mean_best_iou": mean_best,
-
-                    "mean_final_iou": mean_final,
-
-                    "variance": variance,
-
-                    "success_rate": success_rate,
-
-                    "mini_score": mini_score,
-
-                    "evaluations": len(mini_transfer_seeds),
-
-                }
-
-            )
-
-        if not summary_results:
-
-            return None
-
-        best_result = max(summary_results, key=lambda entry: entry["mini_score"])
-
-        summary = dict(best_result)
-
-        summary["candidates"] = summary_results
-
-        return summary
+        stability_cfg_eval = (
+            train_stability_cfg if train_stability_cfg.get("enabled") else None
+        )
+        ctx = _mini_transfer_module.MiniTransferContext(
+            device=device,
+            world_cfg=world_cfg,
+            eval_steps=mini_transfer_eval_steps,
+            warmup=warmup,
+            die_cap_schedule=die_cap_schedule,
+            die_cap_frac=die_cap_frac,
+            late_cleanup_start_frac=late_cleanup_start_frac,
+            alpha_fp=alpha_fp,
+            beta_fn=beta_fn,
+            gamma_area=gamma_area,
+            stem_penalty_scale=stem_penalty_scale,
+            stem_cleanup_multiplier=stem_cleanup_multiplier,
+            stem_corridor_start_scale=stem_corridor_start_scale,
+            stem_corridor_end_scale=stem_corridor_end_scale,
+            t_symmetry_weight=t_symmetry_weight,
+            t_trunk_weight=t_trunk_weight,
+            clean_component_target=clean_component_target,
+            clean_fp_target=clean_fp_target,
+            coverage_reward_weight=coverage_reward_weight,
+            coverage_target_floor=coverage_target_floor,
+            coverage_penalty_weight=coverage_penalty_weight,
+            sparse_area_floor=sparse_area_floor,
+            sparse_penalty_weight=sparse_penalty_weight,
+            default_target_mask=default_target_mask,
+            default_target_area=default_target_area,
+            default_target_label=default_target_label,
+            transfer_t_weights=transfer_weights,
+            stability_cfg_eval=stability_cfg_eval,
+            seeds=mini_transfer_seeds,
+            simple_mean=_simple_mean,
+            simple_variance=_simple_variance,
+            prepare_world_fn=prepare_world,
+        )
+        return _mini_transfer_module.run_mini_transfer_eval(
+            candidate_indices, population, ctx
+        )
 
     phases: List[Dict[str, Any]]
 
@@ -1246,15 +1113,12 @@ def train_ga(
 
         ]
 
-    def make_model() -> LittleLM:
-
-        model = prepare_model(model_cfg)
-
-        model.eval()
-
-        return model
-
-    population = init_population(population_size, make_model)
+    # Model factory for init_population / mutation rebuild paths. Inlined
+    # from a former make_model() closure; prepare_model already returns
+    # a model in eval() mode, so no explicit .eval() call is needed.
+    population = init_population(
+        population_size, lambda: prepare_model(model_cfg)
+    )
 
     best_overall_score = float("-inf")
 
