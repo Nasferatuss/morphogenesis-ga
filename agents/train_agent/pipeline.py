@@ -20,6 +20,7 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import torch
 
+from agents.train_agent import benchmark_runner as _benchmark_module
 from agents.train_agent import mini_transfer as _mini_transfer_module
 from agents.train_agent.adaptive_mutation import (
     AdaptiveMutationConfig,
@@ -64,7 +65,7 @@ from core.services.factory import (
 from core.services.stats import summarize
 from core.services.visualizer import build_visualizer
 from core.services.writer import build_writer
-from src.benchmark import BenchmarkConfig, evaluate_t_benchmark
+from src.benchmark import BenchmarkConfig
 from src.fitness import compute_fitness
 from src.ga import (
     clone_model,
@@ -745,293 +746,90 @@ def train_ga(
     compute_benchmark_score = _agent_bench_score
     compute_benchmark_dict_score = _agent_bench_dict_score
 
+    # Benchmark evaluation (run_benchmark_mode + execute_benchmarks) was
+    # extracted to agents/train_agent/benchmark_runner.py. The mutable
+    # nonlocal state (benchmark_passed, stop_training, champion_score,
+    # champion_mode, champion_details, champion_source) is consolidated
+    # into BenchmarkState which is passed by reference. The thin wrappers
+    # below build the immutable BenchmarkContext per-call (because some
+    # referenced objects like latest_candidate_path are defined later in
+    # pipeline.py and need to be captured at call-time, not init-time).
+    _bench_state = _benchmark_module.BenchmarkState()
+
     def run_benchmark_mode(mode_state: Dict[str, Any], reason: str) -> None:
-
         nonlocal benchmark_passed, stop_training, champion_score, champion_mode, champion_details, champion_source
-
-        best_checkpoint_path = run_dir / "best.pt"
-
-        benchmark_model_path: Optional[Path] = None
-
-        benchmark_model_source = None
-
-        benchmark_model_phase = None
-
-        benchmark_model_generation = None
-
-        if latest_candidate_path.exists():
-
-            benchmark_model_path = latest_candidate_path
-
-            benchmark_model_source = "latest_candidate"
-
-            benchmark_model_phase = latest_candidate_meta.get("phase")
-
-            benchmark_model_generation = latest_candidate_meta.get("generation")
-
-        elif best_checkpoint_path.exists():
-
-            benchmark_model_path = best_checkpoint_path
-
-            benchmark_model_source = "best"
-
-        elif champion_path.exists():
-
-            benchmark_model_path = champion_path
-
-            benchmark_model_source = "champion"
-
-        if benchmark_model_path is None or not benchmark_model_path.exists():
-
-            print("[WARN] Cannot run benchmark yet; candidate checkpoint missing.")
-
-            return
-
-        try:
-
-            checkpoint = torch.load(benchmark_model_path, map_location="cpu")
-
-        except Exception as err:  # pragma: no cover - IO guard
-
-            print(f"[WARN] Failed to load checkpoint for benchmark: {err}")
-
-            return
-
-        bench_model = prepare_model(model_cfg)
-
-        bench_model.load_state_dict(checkpoint)
-
-        bench_model.eval()
-
-        mode_dir = benchmark_dir / mode_state["mode"]
-
-        bench_run = evaluate_t_benchmark(
-
-            bench_model,
-
-            benchmark_cfg=mode_state["config"],
-
+        ctx = _benchmark_module.BenchmarkContext(
+            run_dir=run_dir,
+            latest_candidate_path=latest_candidate_path,
+            champion_path=champion_path,
+            benchmark_dir=benchmark_dir,
+            model_cfg=model_cfg,
             world_cfg=world_cfg,
-
             simulate_cfg=simulate_cfg,
-
             fitness_cfg=fitness_cfg,
-
-            target_mask=default_target_mask,
-
-            target_area=default_target_area,
-
+            default_target_mask=default_target_mask,
+            default_target_area=default_target_area,
             device=device,
-
-            output_dir=mode_dir,
-
-            stability_weights=t_phase_weights if t_phase_weights else None,
-
+            t_phase_weights=t_phase_weights if t_phase_weights else None,
+            writer=writer,
+            target_progress=target_progress,
+            benchmark_history=benchmark_history,
+            benchmark_results_map=benchmark_results_map,
+            prepare_model_fn=prepare_model,
+            compute_benchmark_score_fn=compute_benchmark_score,
+            update_status_fn=update_status,
         )
-
-        bench_model.to("cpu")
-
-        mode_state["last_gen"] = global_gen
-
-        summary_dict = bench_run.summary.to_dict()
-
-        benchmark_results_map[mode_state["mode"]] = summary_dict
-
-        improved = False
-
-        if (
-
-            bench_run.summary.success_rate_stabilized
-
-            > mode_state["best_stabilized"] + mode_state["config"].plateau_min_delta
-
-        ):
-
-            mode_state["best_stabilized"] = bench_run.summary.success_rate_stabilized
-
-            improved = True
-
-        if (
-
-            bench_run.summary.mean_final_iou
-
-            > mode_state["best_final_iou"] + mode_state["config"].plateau_min_delta
-
-        ):
-
-            mode_state["best_final_iou"] = bench_run.summary.mean_final_iou
-
-            improved = True
-
-        if improved:
-
-            mode_state["plateau_runs"] = 0
-
-        else:
-
-            mode_state["plateau_runs"] += 1
-
-        history_dir = mode_dir / "history"
-
-        history_dir.mkdir(parents=True, exist_ok=True)
-
-        reason_slug = reason.replace(" ", "_")
-
-        snapshot_dir = history_dir / f"gen_{global_gen:05d}_{reason_slug}"
-
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
-
-        summary_snapshot = snapshot_dir / bench_run.summary_path.name
-
-        per_seed_snapshot = snapshot_dir / bench_run.per_seed_path.name
-
-        shutil.copyfile(bench_run.summary_path, summary_snapshot)
-
-        shutil.copyfile(bench_run.per_seed_path, per_seed_snapshot)
-
-        seeds_src_dir = bench_run.output_dir / "seeds"
-
-        seeds_snapshot_dir = snapshot_dir / "seeds"
-
-        seeds_history_path = seeds_src_dir
-
-        if seeds_src_dir.exists():
-
-            shutil.copytree(seeds_src_dir, seeds_snapshot_dir, dirs_exist_ok=True)
-
-            seeds_history_path = seeds_snapshot_dir
-
-        benchmark_history.append(
-
-            {
-
-                "generation": global_gen,
-
-                "mode": mode_state["mode"],
-
-                "reason": reason,
-
-                "verdict": bench_run.summary.verdict,
-
-                "summary": summary_dict,
-
-                "summary_path": str(summary_snapshot),
-
-                "per_seed_path": str(per_seed_snapshot),
-
-                "latest_summary_path": str(bench_run.summary_path),
-
-                "latest_per_seed_path": str(bench_run.per_seed_path),
-
-                "snapshot_dir": str(snapshot_dir),
-
-                "seeds_path": str(seeds_history_path.resolve()),
-
-                "model_path": str(benchmark_model_path.resolve()),
-
-                "model_source": benchmark_model_source,
-
-                "model_generation": benchmark_model_generation,
-
-                "model_phase": benchmark_model_phase,
-
-            }
-
+        _benchmark_module.run_benchmark_mode(
+            mode_state, reason,
+            ctx=ctx, state=_bench_state,
+            global_gen=global_gen,
+            latest_candidate_meta=latest_candidate_meta,
         )
-
-        writer.add_scalar(
-
-            f"benchmark/{mode_state['mode']}/mean_best_iou",
-
-            bench_run.summary.mean_best_iou,
-
-            global_step=global_gen,
-
-        )
-
-        writer.add_scalar(
-
-            f"benchmark/{mode_state['mode']}/mean_final_iou",
-
-            bench_run.summary.mean_final_iou,
-
-            global_step=global_gen,
-
-        )
-
-        score = compute_benchmark_score(bench_run.summary)
-
-        current_champion_score = champion_score if champion_score is not None else float("-inf")
-
-        if score >= mode_state["champion_min_score"] and score > current_champion_score + 1e-6:
-
-            shutil.copyfile(best_checkpoint_path, champion_path)
-
-            champion_score = score
-
-            champion_mode = mode_state["mode"]
-
-            champion_source = f"benchmark:{mode_state['mode']}"
-
-            champion_details = {
-
-                "score": champion_score,
-
-                "source": champion_source,
-
-                "generation": global_gen,
-
-                "benchmark_summary": summary_dict,
-
-                "model_path": str(benchmark_model_path.resolve()),
-
-                "model_source": benchmark_model_source,
-
-            }
-
-        if mode_state["mode"] == "target":
-
-            target_progress["best_stabilized"] = max(
-
-                target_progress["best_stabilized"], bench_run.summary.success_rate_stabilized
-
-            )
-
-            target_progress["best_mean_final_iou"] = max(
-
-                target_progress["best_mean_final_iou"], bench_run.summary.mean_final_iou
-
-            )
-
-            if bench_run.summary.verdict == "benchmark_passed":
-
-                benchmark_passed = True
-
-                stop_training = True
-
-                update_status("benchmark_passed", global_gen)
-
-            else:
-
-                update_status("benchmark_failed", global_gen)
+        # Sync nonlocals back from mutable state
+        benchmark_passed = _bench_state.benchmark_passed
+        stop_training = _bench_state.stop_training
+        champion_score = _bench_state.champion_score
+        champion_mode = _bench_state.champion_mode
+        champion_details = _bench_state.champion_details
+        champion_source = _bench_state.champion_source
 
     def execute_benchmarks(triggered: List[Tuple[Dict[str, Any], str]]) -> None:
-
-        if not benchmark_enabled or not triggered:
-
-            return
-
-        update_status("benchmark_pending", global_gen)
-
-        update_status("benchmark_running", global_gen)
-
-        for mode_state, reason in triggered:
-
-            run_benchmark_mode(mode_state, reason)
-
-        if not benchmark_passed:
-
-            update_status("training", global_gen)
+        nonlocal benchmark_passed, stop_training, champion_score, champion_mode, champion_details, champion_source
+        _benchmark_module.execute_benchmarks(
+            triggered,
+            benchmark_enabled=benchmark_enabled,
+            ctx=_benchmark_module.BenchmarkContext(
+                run_dir=run_dir,
+                latest_candidate_path=latest_candidate_path,
+                champion_path=champion_path,
+                benchmark_dir=benchmark_dir,
+                model_cfg=model_cfg,
+                world_cfg=world_cfg,
+                simulate_cfg=simulate_cfg,
+                fitness_cfg=fitness_cfg,
+                default_target_mask=default_target_mask,
+                default_target_area=default_target_area,
+                device=device,
+                t_phase_weights=t_phase_weights if t_phase_weights else None,
+                writer=writer,
+                target_progress=target_progress,
+                benchmark_history=benchmark_history,
+                benchmark_results_map=benchmark_results_map,
+                prepare_model_fn=prepare_model,
+                compute_benchmark_score_fn=compute_benchmark_score,
+                update_status_fn=update_status,
+            ),
+            state=_bench_state,
+            global_gen=global_gen,
+            latest_candidate_meta=latest_candidate_meta,
+        )
+        # Sync nonlocals back from mutable state
+        benchmark_passed = _bench_state.benchmark_passed
+        stop_training = _bench_state.stop_training
+        champion_score = _bench_state.champion_score
+        champion_mode = _bench_state.champion_mode
+        champion_details = _bench_state.champion_details
+        champion_source = _bench_state.champion_source
 
     # Mini-transfer evaluation (cross-seed candidate robustness) was
     # extracted to agents/train_agent/mini_transfer.py. The context
