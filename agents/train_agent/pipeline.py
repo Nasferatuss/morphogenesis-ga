@@ -22,6 +22,7 @@ import torch
 
 from agents.train_agent import benchmark_runner as _benchmark_module
 from agents.train_agent import mini_transfer as _mini_transfer_module
+from agents.train_agent.evaluator import EvaluatorState
 from agents.train_agent.adaptive_mutation import (
     AdaptiveMutationConfig,
     adapt_mutation_std,
@@ -1018,39 +1019,13 @@ def train_ga(
 
         enable_t_metrics = label_lower == "t"
 
-        phase_cleanup_ratio = 0.0
-
-        stem_scale_multiplier = 1.0
-
-        blend_weight = 1.0
+        # Mutable evaluator state — former 15 nonlocal variables + 6 setter
+        # closures consolidated into EvaluatorState dataclass (see
+        # agents/train_agent/evaluator.py). Setters are now methods on the
+        # dataclass; the evaluator closure reads state through `_eval_state`.
+        _eval_state = EvaluatorState()
 
         blend_state: Optional[Dict[str, Any]] = None
-
-        late_stage_fp_multiplier = 1.0
-
-        late_stage_symmetry_bonus = 0.0
-
-        late_stage_trunk_bonus = 0.0
-
-        late_stage_clean_component = 0.0
-
-        late_stage_clean_fp = 0.0
-
-        late_stage_enforcer_cfg: Optional[Dict[str, float]] = None
-
-        t_phase_gate_value = 1.0
-
-        t_structure_gate_value = 1.0
-
-        t_cleanliness_gate_value = 1.0
-
-        collapse_area_floor_value = 0.0
-
-        collapse_coverage_floor_value = 0.0
-
-        collapse_penalty_weight_value = 0.0
-
-        collapse_suppress_value = 0.0
 
         if blend_from is not None:
 
@@ -1075,194 +1050,6 @@ def train_ga(
                     "trunk_weight": t_trunk_weight if blend_label == "t" else 0.0,
 
                 }
-
-        def set_phase_cleanup_ratio(value: float) -> None:
-
-            nonlocal phase_cleanup_ratio
-
-            try:
-
-                ratio = float(value)
-
-            except (TypeError, ValueError):
-
-                ratio = 0.0
-
-            phase_cleanup_ratio = max(0.0, min(1.0, ratio))
-
-        def set_blend_weight(value: float) -> None:
-
-            nonlocal blend_weight
-
-            try:
-
-                weight = float(value)
-
-            except (TypeError, ValueError):
-
-                weight = 1.0
-
-            blend_weight = max(0.0, min(1.0, weight))
-
-        def set_stem_scale_multiplier(value: float) -> None:
-
-            nonlocal stem_scale_multiplier
-
-            try:
-
-                mult = float(value)
-
-            except (TypeError, ValueError):
-
-                mult = 1.0
-
-            if mult < 0.0:
-
-                mult = 0.0
-
-            stem_scale_multiplier = mult
-
-        def set_late_stage_modifiers(
-
-            fp_mult: float,
-
-            sym_bonus: float,
-
-            trunk_bonus: float,
-
-            clean_component: float,
-
-            clean_fp: float,
-
-        ) -> None:
-
-            nonlocal late_stage_fp_multiplier, late_stage_symmetry_bonus, late_stage_trunk_bonus, late_stage_clean_component, late_stage_clean_fp
-
-            try:
-
-                late_stage_fp_multiplier = max(0.0, float(fp_mult))
-
-            except (TypeError, ValueError):
-
-                late_stage_fp_multiplier = 1.0
-
-            try:
-
-                late_stage_symmetry_bonus = float(sym_bonus)
-
-            except (TypeError, ValueError):
-
-                late_stage_symmetry_bonus = 0.0
-
-            try:
-
-                late_stage_trunk_bonus = float(trunk_bonus)
-
-            except (TypeError, ValueError):
-
-                late_stage_trunk_bonus = 0.0
-
-            try:
-
-                late_stage_clean_component = max(0.0, float(clean_component))
-
-            except (TypeError, ValueError):
-
-                late_stage_clean_component = 0.0
-
-            try:
-
-                late_stage_clean_fp = max(0.0, float(clean_fp))
-
-            except (TypeError, ValueError):
-
-                late_stage_clean_fp = 0.0
-
-        def set_late_structure_enforcer(config: Optional[Dict[str, float]]) -> None:
-
-            nonlocal late_stage_enforcer_cfg
-
-            late_stage_enforcer_cfg = config if config else None
-
-        def set_transition_controls(
-
-            t_gate: float,
-
-            structure_gate: float,
-
-            clean_gate: float,
-
-            collapse_area: float,
-
-            collapse_coverage: float,
-
-            collapse_penalty: float,
-
-            collapse_suppress: float,
-
-        ) -> None:
-
-            nonlocal t_phase_gate_value, t_structure_gate_value, t_cleanliness_gate_value
-
-            nonlocal collapse_area_floor_value, collapse_coverage_floor_value
-
-            nonlocal collapse_penalty_weight_value, collapse_suppress_value
-
-            try:
-
-                t_phase_gate_value = max(0.0, min(1.0, float(t_gate)))
-
-            except (TypeError, ValueError):
-
-                t_phase_gate_value = 1.0
-
-            try:
-
-                t_structure_gate_value = max(0.0, min(1.0, float(structure_gate)))
-
-            except (TypeError, ValueError):
-
-                t_structure_gate_value = 1.0
-
-            try:
-
-                t_cleanliness_gate_value = max(0.0, min(1.0, float(clean_gate)))
-
-            except (TypeError, ValueError):
-
-                t_cleanliness_gate_value = 1.0
-
-            try:
-
-                collapse_area_floor_value = max(0.0, float(collapse_area))
-
-            except (TypeError, ValueError):
-
-                collapse_area_floor_value = 0.0
-
-            try:
-
-                collapse_coverage_floor_value = max(0.0, float(collapse_coverage))
-
-            except (TypeError, ValueError):
-
-                collapse_coverage_floor_value = 0.0
-
-            try:
-
-                collapse_penalty_weight_value = max(0.0, float(collapse_penalty))
-
-            except (TypeError, ValueError):
-
-                collapse_penalty_weight_value = 0.0
-
-            try:
-
-                collapse_suppress_value = max(0.0, float(collapse_suppress))
-
-            except (TypeError, ValueError):
-
-                collapse_suppress_value = 0.0
 
         def evaluator(model: LittleLM, idx: int) -> Dict[str, Any]:
 
@@ -1312,7 +1099,7 @@ def train_ga(
 
             model.to("cpu")
 
-            scaled_stem_penalty = stem_penalty_scale * stem_scale_multiplier
+            scaled_stem_penalty = stem_penalty_scale * _eval_state.stem_scale_multiplier
 
             alpha_fp_dynamic = alpha_fp
 
@@ -1320,7 +1107,7 @@ def train_ga(
 
                 alpha_fp_dynamic = alpha_fp * (1.0 + 0.08 * cleanup_ratio)
 
-                alpha_fp_dynamic *= max(0.0, late_stage_fp_multiplier)
+                alpha_fp_dynamic *= max(0.0, _eval_state.late_stage_fp_multiplier)
 
             sym_weight = target_sym_weight
 
@@ -1332,17 +1119,17 @@ def train_ga(
 
             if label_lower == "t":
 
-                sym_weight += late_stage_symmetry_bonus
+                sym_weight += _eval_state.late_stage_symmetry_bonus
 
-                trunk_weight += late_stage_trunk_bonus
+                trunk_weight += _eval_state.late_stage_trunk_bonus
 
-                clean_component_weight = late_stage_clean_component
+                clean_component_weight = _eval_state.late_stage_clean_component
 
-                clean_fp_weight = late_stage_clean_fp
+                clean_fp_weight = _eval_state.late_stage_clean_fp
 
-            collapse_area_floor_local = collapse_area_floor_value if enable_t_metrics else 0.0
+            collapse_area_floor_local = _eval_state.collapse_area_floor_value if enable_t_metrics else 0.0
 
-            collapse_coverage_floor_local = collapse_coverage_floor_value if enable_t_metrics else 0.0
+            collapse_coverage_floor_local = _eval_state.collapse_coverage_floor_value if enable_t_metrics else 0.0
 
             dynamic_t_weights = None
 
@@ -1380,7 +1167,7 @@ def train_ga(
 
                 stem_cleanup_ratio=cleanup_ratio,
 
-                stem_phase_cleanup_ratio=phase_cleanup_ratio,
+                stem_phase_cleanup_ratio=_eval_state.phase_cleanup_ratio,
 
                 stem_corridor_start_scale=stem_corridor_start_scale,
 
@@ -1410,19 +1197,19 @@ def train_ga(
 
                 sparse_penalty_weight=sparse_penalty_weight,
 
-                t_phase_gate=t_phase_gate_value if enable_t_metrics else 1.0,
+                t_phase_gate=_eval_state.t_phase_gate_value if enable_t_metrics else 1.0,
 
-                t_structure_gate=t_structure_gate_value if enable_t_metrics else 1.0,
+                t_structure_gate=_eval_state.t_structure_gate_value if enable_t_metrics else 1.0,
 
-                t_cleanliness_gate=t_cleanliness_gate_value if enable_t_metrics else 1.0,
+                t_cleanliness_gate=_eval_state.t_cleanliness_gate_value if enable_t_metrics else 1.0,
 
                 collapse_area_floor=collapse_area_floor_local,
 
                 collapse_coverage_floor=collapse_coverage_floor_local,
 
-                collapse_penalty_weight=collapse_penalty_weight_value if enable_t_metrics else 0.0,
+                collapse_penalty_weight=_eval_state.collapse_penalty_weight_value if enable_t_metrics else 0.0,
 
-                collapse_bonus_suppression=collapse_suppress_value if enable_t_metrics else 0.0,
+                collapse_bonus_suppression=_eval_state.collapse_suppress_value if enable_t_metrics else 0.0,
 
             )
 
@@ -1452,7 +1239,7 @@ def train_ga(
 
                     stem_cleanup_ratio=cleanup_ratio,
 
-                    stem_phase_cleanup_ratio=phase_cleanup_ratio,
+                    stem_phase_cleanup_ratio=_eval_state.phase_cleanup_ratio,
 
                     stem_corridor_start_scale=stem_corridor_start_scale,
 
@@ -1494,7 +1281,7 @@ def train_ga(
 
                 blend_fitness = blend_metrics["fitness"]
 
-                fitness_val = (1.0 - blend_weight) * blend_fitness + blend_weight * fitness_val
+                fitness_val = (1.0 - _eval_state.blend_weight) * blend_fitness + _eval_state.blend_weight * fitness_val
 
             result = {
 
@@ -1560,23 +1347,7 @@ def train_ga(
 
             return result
 
-        return (
-
-            evaluator,
-
-            set_phase_cleanup_ratio,
-
-            set_blend_weight,
-
-            set_stem_scale_multiplier,
-
-            set_late_stage_modifiers,
-
-            set_late_structure_enforcer,
-
-            set_transition_controls,
-
-        )
+        return evaluator, _eval_state
 
     phase_id_map: Dict[str, int] = {}
 
@@ -1620,23 +1391,7 @@ def train_ga(
 
             }
 
-        (
-
-            evaluator,
-
-            set_phase_cleanup_ratio,
-
-            set_blend_weight,
-
-            set_stem_scale_multiplier,
-
-            set_late_stage_modifiers,
-
-            set_late_structure_enforcer,
-
-            set_transition_controls,
-
-        ) = make_evaluator(
+        evaluator, eval_state = make_evaluator(
 
             target_mask,
 
@@ -1730,7 +1485,7 @@ def train_ga(
 
             phase_cleanup_ratio = compute_phase_cleanup_ratio(phase_target, phase_step, generations)
 
-            set_phase_cleanup_ratio(phase_cleanup_ratio)
+            eval_state.set_phase_cleanup_ratio(phase_cleanup_ratio)
 
             writer.add_scalar("ga/stem_phase_cleanup_ratio", phase_cleanup_ratio, global_step=global_gen)
 
@@ -1764,7 +1519,7 @@ def train_ga(
 
                 blend_weight = max(min(transition_bridge_weight, target_weight), transition_bridge_min)
 
-            set_blend_weight(blend_weight)
+            eval_state.set_blend_weight(blend_weight)
 
             coverage_target_floor = coverage_target_floor_base
 
@@ -1972,7 +1727,7 @@ def train_ga(
 
                 stage_clean_fp = clean_fp_start + (clean_fp_target - clean_fp_start) * cleanliness_factor
 
-            set_late_stage_modifiers(
+            eval_state.set_late_stage_modifiers(
 
                 stage_fp_mult,
 
@@ -2028,9 +1783,9 @@ def train_ga(
 
                 }
 
-            set_late_structure_enforcer(late_enforcer_cfg)
+            eval_state.set_late_structure_enforcer(late_enforcer_cfg)
 
-            set_transition_controls(
+            eval_state.set_transition_controls(
 
                 t_phase_gate_value,
 
@@ -2052,7 +1807,7 @@ def train_ga(
 
             stem_scale_mult = resolve_stem_penalty_multiplier(phase_target, phase_name, phase_step, generations)
 
-            set_stem_scale_multiplier(stem_scale_mult)
+            eval_state.set_stem_scale_multiplier(stem_scale_mult)
 
             fitnesses, metrics = evaluate_population(population, evaluator)
 
