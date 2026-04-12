@@ -1,0 +1,67 @@
+# Benchmark specification: cross shape
+# ============================================================================
+# Formal benchmark for the cross-shape target (see src/targets.py::make_target_cross).
+# This is the ENTRY-LEVEL scenario in the curriculum: a horizontally +
+# vertically symmetric pattern that most GA configs can solve in 10-20
+# generations. If a model can't reach 0.50 IoU on this target, it likely
+# has a fundamental problem (bad fitness weights, insufficient population,
+# or broken simulation).
+#
+# Used as the first phase ("phase_cross") in the cross → T curriculum,
+# and as a sanity-check benchmark for new architecture changes.
+#
+# See docs/benchmarks/benchmark_spec.md for the full benchmark suite.
+# ============================================================================
+
+name: cross
+description: "Symmetric cross pattern — entry-level benchmark"
+version: 1
+
+# Target shape parameters
+target:
+  name: cross
+  grid_width: 15
+  grid_height: 15
+  # Expected area: 56 cells (per tests/test_golden.py::test_cross_target_15x15_area)
+
+# Evaluation protocol
+evaluation:
+  mode: deterministic
+  fixed_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  eval_steps: 200
+  population_size: 48
+  anti_extinction_warmup_steps: 10
+  late_cleanup_start_frac: 0.8
+  die_cap_schedule:
+    - until_step: 60
+      cap_frac: 0.20
+    - until_step: 130
+      cap_frac: 0.40
+    - until_step: 999999
+      cap_frac: 0.35
+
+# Pass/fail thresholds
+thresholds:
+  # Minimum multi-seed mean IoU to pass
+  min_mean_iou: 0.30
+  # Minimum fraction of seeds that must reach this IoU
+  min_reach_rate: 0.80
+  reach_iou: 0.25
+  # Maximum acceptable standard deviation across seeds
+  max_std_iou: 0.15
+
+# Metrics collected
+metrics:
+  primary: multi_seed_mean_best_iou
+  secondary:
+    - multi_seed_mean_final_iou
+    - reach_rate_at_025
+    - reach_rate_at_030
+    - std_best_iou
+    - mean_alive_end
+    - mean_area_ratio
+
+# Historical reference
+reference:
+  baseline_v1_best_iou: 0.2429   # gen 2 of reproducibility_freeze_v1 (cross phase)
+  note: "Cross phase is generally solved in 2-3 generations with pop=16. Formal benchmark uses pop=48 for consistency with T-shape evaluation."

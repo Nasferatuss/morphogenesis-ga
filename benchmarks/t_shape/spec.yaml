@@ -1,0 +1,85 @@
+# Benchmark specification: T shape
+# ============================================================================
+# Formal benchmark for the T-shape target (see src/targets.py::make_target_T).
+# This is the PRIMARY evaluation scenario — the "north star" benchmark that
+# determines champion ranking. The T shape requires both:
+# - A horizontal top bar (row 2, columns 1-13 on a 15×15 grid)
+# - A vertical trunk (column 7, rows 2-14)
+#
+# The bar-vs-trunk dilemma (see docs/visual_diagnosis_2026-04-10.md) makes
+# this a hard problem for the current architecture: ACTION_DIVIDE picks a
+# random neighbor, so directed trunk growth requires the model to learn a
+# positional strategy. With use_position=true, MS-10 IoU reaches ~0.33-0.43.
+#
+# See docs/benchmarks/benchmark_spec.md for the full benchmark suite.
+# ============================================================================
+
+name: t_shape
+description: "T-shape — primary benchmark, bar + trunk construction"
+version: 1
+
+# Target shape parameters
+target:
+  name: T
+  grid_width: 15
+  grid_height: 15
+  # Expected area: 25 cells (per tests/test_golden.py::test_t_target_15x15_area)
+
+# Evaluation protocol
+evaluation:
+  mode: deterministic
+  fixed_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  eval_steps: 200
+  population_size: 48
+  anti_extinction_warmup_steps: 25
+  late_cleanup_start_frac: 0.75
+  die_cap_schedule:
+    - until_step: 60
+      cap_frac: 0.20
+    - until_step: 130
+      cap_frac: 0.40
+    - until_step: 999999
+      cap_frac: 0.35
+
+# Pass/fail thresholds
+thresholds:
+  # Minimum multi-seed mean IoU to pass
+  min_mean_iou: 0.30
+  # Minimum fraction of seeds that must reach this IoU
+  min_reach_rate: 0.80
+  reach_iou: 0.30
+  # Maximum acceptable standard deviation across seeds
+  max_std_iou: 0.10
+
+# Metrics collected
+metrics:
+  primary: multi_seed_mean_best_iou
+  secondary:
+    - multi_seed_mean_final_iou
+    - reach_rate_at_030
+    - reach_rate_at_040
+    - std_best_iou
+    - mean_alive_end
+    - mean_area_ratio
+    - mean_t_symmetry
+    - mean_t_trunk_coverage
+    - mean_components
+
+# Historical references (from docs/leaderboard.md as of 2026-04-12)
+reference:
+  baseline_v1_best_iou: 0.1405       # gen 6 of reproducibility_freeze_v1 (T_refine phase)
+  baseline_v2_ms10_mean: 0.3290      # reproducibility_freeze_v2 (HPO winner, clean seed)
+  trophy_checkpoint_ms10: 0.4254     # champion_hpo_v1 (not reproducible — RNG artifact)
+  pre_hpo_champion_ms10: 0.3390      # exp_t_strong_iou (pre-HPO best)
+  architectural_ceiling_note: "0.40 MS-10 was reached by a non-reproducible RNG artifact (trophy checkpoint). Reproducible configs reach ~0.33. Directional actions (ACTION_DIVIDE_N/S/E/W) projected to push to 0.55-0.70."
+
+# Structural diagnostics
+diagnostics:
+  # The T shape requires BOTH a bar row AND a trunk column.
+  # Current architecture (random ACTION_DIVIDE) struggles with directed
+  # trunk construction. Key diagnostic: check t_trunk_coverage metric.
+  # If trunk_coverage < 0.1 but bar_coverage > 0.8, model has the
+  # classic bar-only phenotype (see visual_diagnosis_2026-04-10.md).
+  bar_coverage_floor: 0.50     # Expect at least 50% of bar cells correct
+  trunk_coverage_floor: 0.05   # Even 5% trunk is meaningful signal
+  max_alive_ratio: 6.0         # alive_end / target_area — flag overflow if > 6
