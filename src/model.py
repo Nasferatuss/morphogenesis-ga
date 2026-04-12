@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 NUM_CELL_TYPES = 4
-NUM_ACTIONS = 5
+NUM_ACTIONS = 9  # 5 legacy + 4 directional divides (N/S/E/W)
 NUM_NEIGHBORS = 8
 
 

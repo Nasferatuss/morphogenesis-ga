@@ -13,8 +13,26 @@ CELL_B = 3
 ACTION_STAY = 0
 ACTION_BECOME_A = 1
 ACTION_BECOME_B = 2
-ACTION_DIVIDE = 3
+ACTION_DIVIDE = 3          # random empty neighbor (legacy)
 ACTION_DIE = 4
+# Directional divide actions (new, 2026-04-12).
+# Each tries one specific cardinal neighbor first. If that cell is
+# occupied or out of bounds, the action is a no-op (cell stays as stem).
+# This gives the GA a clean learning signal: choosing DIVIDE_S when the
+# south cell is free = directed growth; choosing it when occupied = wasted
+# turn. The selection pressure teaches models to pick directions correctly.
+ACTION_DIVIDE_N = 5        # try (y-1, x)
+ACTION_DIVIDE_S = 6        # try (y+1, x)
+ACTION_DIVIDE_E = 7        # try (y, x+1)
+ACTION_DIVIDE_W = 8        # try (y, x-1)
+
+# Cardinal direction offsets for directional divide.
+_DIRECTIONAL_OFFSETS = {
+    ACTION_DIVIDE_N: (-1, 0),
+    ACTION_DIVIDE_S: (1, 0),
+    ACTION_DIVIDE_E: (0, 1),
+    ACTION_DIVIDE_W: (0, -1),
+}
 
 NEIGHBOR_OFFSETS: Sequence[Tuple[int, int]] = (
     (-1, -1),
@@ -82,6 +100,19 @@ class World:
                     if self.grid[ny, nx] == CELL_EMPTY:
                         self.grid[ny, nx] = CELL_STEM
                         divisions += 1
+            elif action in _DIRECTIONAL_OFFSETS:
+                dy, dx = _DIRECTIONAL_OFFSETS[action]
+                ny, nx = y + dy, x + dx
+                if (
+                    0 <= ny < self.height
+                    and 0 <= nx < self.width
+                    and prev_grid[ny, nx].item() == CELL_EMPTY
+                    and self.grid[ny, nx] == CELL_EMPTY
+                ):
+                    self.grid[ny, nx] = CELL_STEM
+                    divisions += 1
+                # else: no-op (cell stays as stem) — selection pressure
+                # teaches the model to pick valid directions
             elif action == ACTION_DIE:
                 self.grid[y, x] = CELL_EMPTY
                 deaths += 1
