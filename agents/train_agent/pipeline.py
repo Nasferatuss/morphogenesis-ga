@@ -193,6 +193,10 @@ def train_ga(
 
     t_trunk_weight = float(fitness_cfg.get("t_trunk_weight", 0.0))
 
+    stem_trunk_bonus_weight = float(fitness_cfg.get("stem_trunk_bonus_weight", 0.0))
+
+    stem_trunk_discount = float(fitness_cfg.get("stem_trunk_discount", 0.0))
+
     late_t_cfg = fitness_cfg.get("late_t", {})
 
     late_fp_multiplier = float(late_t_cfg.get("fp_multiplier", 1.0))
@@ -1210,6 +1214,10 @@ def train_ga(
                 collapse_penalty_weight=_eval_state.collapse_penalty_weight_value if enable_t_metrics else 0.0,
 
                 collapse_bonus_suppression=_eval_state.collapse_suppress_value if enable_t_metrics else 0.0,
+
+                stem_trunk_bonus_weight=stem_trunk_bonus_weight if enable_t_metrics else 0.0,
+
+                stem_trunk_discount=stem_trunk_discount if enable_t_metrics else 0.0,
 
             )
 

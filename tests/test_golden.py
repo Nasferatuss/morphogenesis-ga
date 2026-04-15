@@ -230,6 +230,11 @@ BASELINE_V1_EXPECTED = [
 
 @pytest.mark.golden
 @pytest.mark.slow
+@pytest.mark.xfail(
+    reason="v1 baseline captured before t_morph_bonus fix (morph bonus was computed "
+    "but never added to fitness). v3 captures the corrected behavior. "
+    "See baseline_v3 below.",
+)
 class TestGoldenBaselineV1:
     """Reproducibility baseline — full train_ga run anchored on exact numbers.
 
@@ -508,3 +513,110 @@ class TestGoldenBaselineV2:
                 "baseline v2 should have zero stabilization "
                 "(see baseline_v2.md §Known limitations)"
             )
+
+
+# ---------------------------------------------------------------------------
+# Baseline v3 — post-morph-bonus-fix reproducibility freeze (2026-04-15)
+# ---------------------------------------------------------------------------
+#
+# v1 had a silent bug: t_morph_bonus (symmetry_weight * t_symmetry +
+# trunk_weight * t_trunk_continuity) was computed but never added to
+# fitness (expression result was discarded). The fix in src/fitness.py
+# assigns the expression to ``t_morph_bonus`` and adds it to ``fitness``.
+# Additionally, ``_compute_t_diagnostics`` now accepts a
+# ``stem_trunk_credit`` parameter that gives partial trunk credit for
+# stem cells (0.5 weight) when building T shapes.
+#
+# These values replace v1 as the active CPU baseline. Config is the same
+# ``reproducibility_freeze_v1.yaml``; only the fitness code changed.
+
+BASELINE_V3_EXPECTED = [
+    # (generation, phase, best_fitness, best_iou, mean_fitness)
+    (1, "phase_cross",      -0.08967260571390494,  0.25153374233128833, -1.5467784334061627),
+    (2, "phase_cross",      -0.3127059905863304,   0.19375,             -1.5772552445056796),
+    (3, "phase_transition", -0.39786756472342283,  0.1619047619047619,  -0.9497761626252792),
+    (4, "phase_T",          -0.8840884925653204,   0.10852713178294573, -1.2811583078020217),
+    (5, "phase_T",          -0.601818017365977,    0.14,                -1.0772257356099924),
+    (6, "phase_T_refine",   -0.5204613175445965,   0.1452991452991453,  -1.173285002837025),
+]
+
+
+@pytest.mark.golden
+@pytest.mark.slow
+class TestGoldenBaselineV3:
+    """Reproducibility baseline v3 — post-morph-bonus-fix CPU anchor.
+
+    Same config as v1 (``reproducibility_freeze_v1.yaml``), same seed 42,
+    CPU-only. The only difference is the corrected fitness code: t_morph_bonus
+    is now actually applied, and stem_trunk_credit gives partial trunk score
+    for stem cells during T-shape evaluation.
+
+    Tolerance: 1e-9 (bit-identical on CPU, same as v1).
+    """
+
+    @pytest.fixture(scope="class")
+    def baseline_run(self, tmp_path_factory) -> list[dict]:
+        import csv
+
+        run_root = tmp_path_factory.mktemp("baseline_v3_run")
+        import os
+        cwd = os.getcwd()
+        os.chdir(run_root)
+        try:
+            cfg = load_config(
+                str(Path(cwd) / "configs" / "reproducibility_freeze_v1.yaml")
+            )
+            args = argparse.Namespace(no_viz=True, steps=None, train_ga=True)
+            target_mask = make_target("T", 15, 15)
+            target_area = float(target_mask.sum().item())
+            set_seed(int(cfg.get("seed", 42)))
+            best_path = train_ga(
+                cfg,
+                args,
+                torch.device("cpu"),
+                target_mask,
+                seed=int(cfg.get("seed", 42)),
+                default_target_name="T",
+                default_target_area=target_area,
+            )
+            run_dir = best_path.parent
+            with (run_dir / "generations.csv").open() as f:
+                return list(csv.DictReader(f))
+        finally:
+            os.chdir(cwd)
+
+    def test_row_count(self, baseline_run):
+        assert len(baseline_run) == len(BASELINE_V3_EXPECTED) == 6
+
+    @pytest.mark.parametrize(
+        "expected",
+        BASELINE_V3_EXPECTED,
+        ids=[f"gen{g}_{p}" for g, p, *_ in BASELINE_V3_EXPECTED],
+    )
+    def test_generation_metrics_anchored(self, baseline_run, expected):
+        exp_gen, exp_phase, exp_best_fit, exp_best_iou, exp_mean_fit = expected
+        row = next(
+            (r for r in baseline_run if int(r["generation"]) == exp_gen), None
+        )
+        assert row is not None, f"missing row for gen {exp_gen}"
+        assert row["phase"] == exp_phase, (
+            f"gen {exp_gen} phase drifted: {row['phase']} != {exp_phase}"
+        )
+        assert float(row["best_fitness"]) == pytest.approx(exp_best_fit, abs=1e-9), (
+            f"gen {exp_gen} best_fitness drifted: {row['best_fitness']} vs {exp_best_fit}"
+        )
+        assert float(row["best_iou"]) == pytest.approx(exp_best_iou, abs=1e-9), (
+            f"gen {exp_gen} best_iou drifted: {row['best_iou']} vs {exp_best_iou}"
+        )
+        assert float(row["mean_fitness"]) == pytest.approx(exp_mean_fit, abs=1e-9), (
+            f"gen {exp_gen} mean_fitness drifted: {row['mean_fitness']} vs {exp_mean_fit}"
+        )
+
+    def test_best_overall_gen1_phase_cross(self, baseline_run):
+        """Best IoU across all 6 generations is at gen 1 phase_cross = 0.2515."""
+        best = max(baseline_run, key=lambda r: float(r["best_iou"]))
+        assert int(best["generation"]) == 1
+        assert best["phase"] == "phase_cross"
+        assert float(best["best_iou"]) == pytest.approx(
+            0.25153374233128833, abs=1e-9
+        )

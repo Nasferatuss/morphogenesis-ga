@@ -5,7 +5,7 @@ from typing import Dict, Optional, Tuple
 
 import torch
 
-from .world import CELL_A, CELL_B, CELL_STEM, NEIGHBOR_OFFSETS
+from .world import CELL_A, CELL_B, CELL_EMPTY, CELL_STEM, NEIGHBOR_OFFSETS
 
 
 def compute_iou(grid: torch.Tensor, target_mask: torch.Tensor) -> float:
@@ -69,7 +69,20 @@ def _normalized_distance(
 
 
 
-def _compute_t_diagnostics(ab_mask: torch.Tensor, target_mask: torch.Tensor) -> Tuple[float, float]:
+def _compute_t_diagnostics(
+    ab_mask: torch.Tensor,
+    target_mask: torch.Tensor,
+    grid: Optional[torch.Tensor] = None,
+    stem_trunk_credit: float = 0.0,
+) -> Tuple[float, float]:
+    """Compute T-shape symmetry and trunk continuity scores.
+
+    When *grid* is provided and *stem_trunk_credit* > 0, stem cells
+    (CELL_STEM) in the trunk column count as partial presence with
+    weight *stem_trunk_credit* (0..1). A/B cells always count as 1.0.
+    This gives the GA a gradient toward trunk construction via the
+    intermediate DIVIDE_S → stem → BECOME_B pathway.
+    """
     target_bool = target_mask.to(dtype=torch.bool)
     if target_bool.sum().item() <= 0:
         return 0.0, 0.0
@@ -115,18 +128,31 @@ def _compute_t_diagnostics(ab_mask: torch.Tensor, target_mask: torch.Tensor) -> 
     trunk_len = int(trunk_target.sum().item())
     if trunk_len <= 0:
         return symmetry_score, 0.0
-    pred_trunk = ab_mask[bar_row + 1 :, trunk_col]
+
+    # Build a weighted presence vector: A/B = 1.0, stem = stem_trunk_credit
+    pred_trunk_ab = ab_mask[bar_row + 1 :, trunk_col]
+    _credit = min(1.0, max(0.0, stem_trunk_credit))
+    if _credit > 0.0 and grid is not None:
+        pred_trunk_stem = (grid[bar_row + 1 :, trunk_col] == CELL_STEM)
+        # Weighted presence: 1.0 for A/B, stem_trunk_credit for stem
+        trunk_presence = pred_trunk_ab.to(dtype=torch.float32) + _credit * pred_trunk_stem.to(dtype=torch.float32)
+        trunk_presence = torch.clamp(trunk_presence, 0.0, 1.0)
+    else:
+        trunk_presence = pred_trunk_ab.to(dtype=torch.float32)
+
     coverage = 0.0
     if trunk_len > 0:
-        coverage = float(torch.logical_and(pred_trunk, trunk_target).sum().item()) / float(trunk_len)
-    pred_list = pred_trunk.to(dtype=torch.bool).to("cpu").tolist()
+        coverage = float(torch.logical_and(trunk_presence > 0.0, trunk_target).sum().item()) / float(trunk_len)
+
+    # Continuity: longest consecutive run of presence in trunk target cells
+    presence_list = (trunk_presence > 0.0).to("cpu").tolist()
     target_list = trunk_target.to(dtype=torch.bool).to("cpu").tolist()
     longest_run = 0
     current_run = 0
-    for pred_val, target_val in zip(pred_list, target_list):
+    for pres_val, target_val in zip(presence_list, target_list):
         if not target_val:
             continue
-        if pred_val:
+        if pres_val:
             current_run += 1
         else:
             if current_run > longest_run:
@@ -385,6 +411,8 @@ def compute_fitness(
     collapse_penalty_weight: float = 0.0,
     collapse_bonus_suppression: float = 0.0,
     late_t_enforce: Optional[Dict[str, float]] = None,
+    stem_trunk_bonus_weight: float = 0.0,
+    stem_trunk_discount: float = 0.0,
 ) -> Dict[str, float]:
     ab_mask = torch.logical_or(grid == CELL_A, grid == CELL_B)
     target_tensor = target_mask.to(device=grid.device)
@@ -437,7 +465,9 @@ def compute_fitness(
     target_com = _center_of_mass(target_bool, height, width)
     com_penalty = 0.10 * _normalized_distance(pred_com, target_com, height, width)
 
-    stem_count = int((grid == CELL_STEM).sum().item())
+    stem_mask = (grid == CELL_STEM)
+    stem_count = int(stem_mask.sum().item())
+
     effective_stem_scale = max(0.0, float(stem_penalty_scale))
     cleanup_ratio = min(1.0, max(0.0, float(stem_cleanup_ratio)))
     phase_cleanup_ratio = min(1.0, max(0.0, float(stem_phase_cleanup_ratio)))
@@ -524,6 +554,35 @@ def compute_fitness(
     t_structure_gate_value = max(0.0, min(1.0, float(t_structure_gate)))
     t_cleanliness_gate_value = max(0.0, min(1.0, float(t_cleanliness_gate)))
 
+    # Stem-trunk bonus: reward stem cells in the target trunk column as
+    # partial trunk construction. Directional divide actions place stem
+    # cells in the trunk column via DIVIDE_S, but IoU and trunk_weight
+    # only see CELL_A/CELL_B. This bonus bridges the gap: stem placement
+    # is an intermediate step toward trunk construction. Default 0.0 so
+    # legacy configs are unchanged. See commit bc0490a for the discovery.
+    stem_trunk_bonus_val = 0.0
+    if stem_trunk_bonus_weight > 0.0 and expect_t_shape:
+        # Find trunk column (same logic as _compute_t_diagnostics)
+        row_counts = target_bool.sum(dim=1)
+        if row_counts.numel() > 0:
+            bar_row = int(torch.argmax(row_counts).item())
+            if bar_row + 1 < height:
+                lower_target = target_bool[bar_row + 1:, :]
+                col_counts = lower_target.sum(dim=0)
+                if col_counts.numel() > 0 and col_counts.max().item() > 0:
+                    trunk_col = int(torch.argmax(col_counts).item())
+                    trunk_target_cells = lower_target[:, trunk_col]
+                    trunk_len = float(trunk_target_cells.sum().item())
+                    if trunk_len > 0:
+                        # Count ANY non-empty cell (stem, A, or B) in
+                        # the trunk target column as partial credit
+                        trunk_stem_or_ab = (grid[bar_row + 1:, trunk_col] != CELL_EMPTY)
+                        trunk_presence = float(
+                            torch.logical_and(trunk_stem_or_ab, trunk_target_cells).sum().item()
+                        )
+                        stem_trunk_ratio = trunk_presence / trunk_len
+                        stem_trunk_bonus_val = float(stem_trunk_bonus_weight) * stem_trunk_ratio
+
     fitness = (
         fitness
         + alive_bonus
@@ -538,6 +597,7 @@ def compute_fitness(
         - coverage_penalty
         - sparse_collapse_penalty
         - empty_collapse_penalty
+        + stem_trunk_bonus_val
     )
 
     t_phase_score = 0.0
@@ -646,11 +706,16 @@ def compute_fitness(
     if stability_info["hold_score"] > 0.0 and geometry_gate < 0.5:
         fitness -= (1.0 - geometry_gate) * stability_info["hold_score"] * 0.4
 
-    t_symmetry, t_trunk_continuity = _compute_t_diagnostics(ab_mask, target_bool)
+    t_symmetry, t_trunk_continuity = _compute_t_diagnostics(
+        ab_mask, target_bool,
+        grid=grid if expect_t_shape else None,
+        stem_trunk_credit=0.5 if expect_t_shape else 0.0,
+    )
     symmetry_weight = max(0.0, float(t_symmetry_weight))
     trunk_weight = max(0.0, float(t_trunk_weight))
     morph_gate = max(0.0, min(1.0, collapse_gate * t_structure_gate_value))
-    morph_gate * (symmetry_weight * t_symmetry + trunk_weight * t_trunk_continuity)
+    t_morph_bonus = morph_gate * (symmetry_weight * t_symmetry + trunk_weight * t_trunk_continuity)
+    fitness += t_morph_bonus
     late_structure_penalty = 0.0
     weak_trunk_component = 0.0
     junction_miss_component = 0.0
@@ -774,4 +839,6 @@ def compute_fitness(
         "late_coverage_penalty": late_coverage_component,
         "late_area_penalty": late_area_component,
         "late_empty_penalty": late_empty_component,
+        "stem_trunk_bonus": stem_trunk_bonus_val,
+        "t_morph_bonus": t_morph_bonus,
     }
