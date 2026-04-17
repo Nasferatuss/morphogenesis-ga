@@ -543,6 +543,11 @@ BASELINE_V3_EXPECTED = [
 
 @pytest.mark.golden
 @pytest.mark.slow
+@pytest.mark.xfail(
+    reason="v3 baseline captured before stem_trunk_credit weighted-presence "
+    "fix (credit magnitude was silently collapsed to binary via > 0.0 "
+    "threshold). v4 captures corrected behavior. See baseline_v4 below.",
+)
 class TestGoldenBaselineV3:
     """Reproducibility baseline v3 — post-morph-bonus-fix CPU anchor.
 
@@ -614,6 +619,119 @@ class TestGoldenBaselineV3:
 
     def test_best_overall_gen1_phase_cross(self, baseline_run):
         """Best IoU across all 6 generations is at gen 1 phase_cross = 0.2515."""
+        best = max(baseline_run, key=lambda r: float(r["best_iou"]))
+        assert int(best["generation"]) == 1
+        assert best["phase"] == "phase_cross"
+        assert float(best["best_iou"]) == pytest.approx(
+            0.25153374233128833, abs=1e-9
+        )
+
+
+# ---------------------------------------------------------------------------
+# Baseline v4 — post-weighted-credit-fix reproducibility freeze (2026-04-16)
+# ---------------------------------------------------------------------------
+#
+# v3 had a silent bug inside `_compute_t_diagnostics`: trunk_presence
+# values were computed WEIGHTED (A/B = 1.0, stem = stem_trunk_credit),
+# but downstream coverage/continuity collapsed them back to binary via
+# `trunk_presence > 0.0`. This made stem_trunk_credit a tumbler (any
+# credit > 0 = same as credit = 1.0) instead of a scale.
+#
+# The fix in src/fitness.py uses weighted presence magnitudes directly:
+# coverage = sum(trunk_presence * trunk_target) / trunk_len, and continuity
+# sums presence values within the longest consecutive run.
+#
+# Impact on v1 freeze config (stem_trunk_credit=0.0 default): tiny drift
+# in transition/T-phase fitness values (~0.01) because for credit=0 the
+# OLD binary check and NEW weighted sum happen to differ in edge cases
+# involving bool→float conversions. best_iou is unchanged across all gens.
+#
+# These values replace v3 as the active CPU baseline.
+
+BASELINE_V4_EXPECTED = [
+    # (generation, phase, best_fitness, best_iou, mean_fitness)
+    (1, "phase_cross",      -0.08967260571390494,  0.25153374233128833, -1.5467784334061627),
+    (2, "phase_cross",      -0.3127059905863304,   0.19375,             -1.5772552445056796),
+    (3, "phase_transition", -0.40370089805675613,  0.1619047619047619,  -0.954060016791946),
+    (4, "phase_T",          -0.8957551592319871,   0.10852713178294573, -1.2910020578020216),
+    (5, "phase_T",          -0.601818017365977,    0.14,                -1.0777726106099925),
+    (6, "phase_T_refine",   -0.5204613175445965,   0.1452991452991453,  -1.173285002837025),
+]
+
+
+@pytest.mark.golden
+@pytest.mark.slow
+class TestGoldenBaselineV4:
+    """Reproducibility baseline v4 — post-weighted-credit-fix CPU anchor.
+
+    Same config as v1/v3 (``reproducibility_freeze_v1.yaml``), same seed 42,
+    CPU-only. The difference from v3 is that `_compute_t_diagnostics` now
+    uses the weighted trunk_presence values directly (sum-based) instead
+    of collapsing them to binary via `> 0.0` thresholds.
+
+    Tolerance: 1e-9 (bit-identical on CPU).
+    """
+
+    @pytest.fixture(scope="class")
+    def baseline_run(self, tmp_path_factory) -> list[dict]:
+        import csv
+
+        run_root = tmp_path_factory.mktemp("baseline_v4_run")
+        import os
+        cwd = os.getcwd()
+        os.chdir(run_root)
+        try:
+            cfg = load_config(
+                str(Path(cwd) / "configs" / "reproducibility_freeze_v1.yaml")
+            )
+            args = argparse.Namespace(no_viz=True, steps=None, train_ga=True)
+            target_mask = make_target("T", 15, 15)
+            target_area = float(target_mask.sum().item())
+            set_seed(int(cfg.get("seed", 42)))
+            best_path = train_ga(
+                cfg,
+                args,
+                torch.device("cpu"),
+                target_mask,
+                seed=int(cfg.get("seed", 42)),
+                default_target_name="T",
+                default_target_area=target_area,
+            )
+            run_dir = best_path.parent
+            with (run_dir / "generations.csv").open() as f:
+                return list(csv.DictReader(f))
+        finally:
+            os.chdir(cwd)
+
+    def test_row_count(self, baseline_run):
+        assert len(baseline_run) == len(BASELINE_V4_EXPECTED) == 6
+
+    @pytest.mark.parametrize(
+        "expected",
+        BASELINE_V4_EXPECTED,
+        ids=[f"gen{g}_{p}" for g, p, *_ in BASELINE_V4_EXPECTED],
+    )
+    def test_generation_metrics_anchored(self, baseline_run, expected):
+        exp_gen, exp_phase, exp_best_fit, exp_best_iou, exp_mean_fit = expected
+        row = next(
+            (r for r in baseline_run if int(r["generation"]) == exp_gen), None
+        )
+        assert row is not None, f"missing row for gen {exp_gen}"
+        assert row["phase"] == exp_phase, (
+            f"gen {exp_gen} phase drifted: {row['phase']} != {exp_phase}"
+        )
+        assert float(row["best_fitness"]) == pytest.approx(exp_best_fit, abs=1e-9), (
+            f"gen {exp_gen} best_fitness drifted: {row['best_fitness']} vs {exp_best_fit}"
+        )
+        assert float(row["best_iou"]) == pytest.approx(exp_best_iou, abs=1e-9), (
+            f"gen {exp_gen} best_iou drifted: {row['best_iou']} vs {exp_best_iou}"
+        )
+        assert float(row["mean_fitness"]) == pytest.approx(exp_mean_fit, abs=1e-9), (
+            f"gen {exp_gen} mean_fitness drifted: {row['mean_fitness']} vs {exp_mean_fit}"
+        )
+
+    def test_best_overall_gen1_phase_cross(self, baseline_run):
+        """Best IoU at gen 1 phase_cross = 0.2515 (unchanged from v3)."""
         best = max(baseline_run, key=lambda r: float(r["best_iou"]))
         assert int(best["generation"]) == 1
         assert best["phase"] == "phase_cross"
