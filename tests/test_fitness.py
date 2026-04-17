@@ -213,64 +213,51 @@ class TestComputeTDiagnostics:
         sym, _ = _compute_t_diagnostics(ab, target)
         assert 0.0 <= sym < 1.0
 
-    def test_stem_trunk_credit_zero_excludes_stems(self) -> None:
-        """credit=0.0 → stems in trunk contribute nothing (baseline, binary A/B only)."""
+    def test_stem_trunk_presence_off_excludes_stems(self) -> None:
+        """presence=False → stems in trunk contribute nothing (A/B only)."""
         target = _t_target()
         grid = _empty_grid(7, 7)
         grid[1, 1:6] = CELL_A  # full bar
         grid[2:6, 3] = CELL_STEM  # trunk filled with STEM only
         ab = torch.logical_or(grid == CELL_A, grid == CELL_B)
-        _, trunk = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_credit=0.0)
-        # No A/B in trunk, credit=0 → trunk score should be 0
+        _, trunk = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_presence=False)
         assert trunk == 0.0
 
-    def test_stem_trunk_credit_scales_linearly(self) -> None:
-        """credit=0.5 gives exactly half of credit=1.0 for all-stem trunk.
-
-        This is the core A/B-testability property: credit magnitude MUST
-        affect the trunk score proportionally. If two different credit
-        values give the same score, the parameter is inert.
-        """
+    def test_stem_trunk_presence_on_counts_stems(self) -> None:
+        """presence=True → stems in trunk count as full presence."""
         target = _t_target()
         grid = _empty_grid(7, 7)
-        grid[1, 1:6] = CELL_A  # full bar (for symmetry)
-        grid[2:6, 3] = CELL_STEM  # trunk fully filled with STEM
+        grid[1, 1:6] = CELL_A  # full bar
+        grid[2:6, 3] = CELL_STEM  # trunk filled with STEM only
         ab = torch.logical_or(grid == CELL_A, grid == CELL_B)
-        _, trunk_c05 = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_credit=0.5)
-        _, trunk_c10 = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_credit=1.0)
-        _, trunk_c03 = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_credit=0.3)
-        # All three should be different and scale with credit
-        assert trunk_c10 > trunk_c05 > trunk_c03 > 0.0
-        # Linear scaling: credit=0.5 gives exactly half of credit=1.0
-        assert abs(trunk_c05 - 0.5 * trunk_c10) < 1e-6
+        _, trunk = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_presence=True)
+        # All-stem trunk with presence=True → perfect trunk score
+        assert trunk == 1.0
 
-    def test_stem_trunk_credit_ab_always_full_weight(self) -> None:
-        """A/B cells always count as 1.0 regardless of credit; only stems are scaled."""
+    def test_stem_trunk_presence_ab_always_perfect(self) -> None:
+        """A/B cells always count regardless of presence flag."""
         target = _t_target()
         grid = _empty_grid(7, 7)
         grid[1, 1:6] = CELL_A
         grid[2:6, 3] = CELL_B  # trunk fully filled with A/B
         ab = torch.logical_or(grid == CELL_A, grid == CELL_B)
-        _, trunk_c02 = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_credit=0.2)
-        _, trunk_c05 = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_credit=0.5)
-        # With all-AB trunk, credit value doesn't matter — should be perfect
-        assert trunk_c02 == trunk_c05 == 1.0
+        _, trunk_off = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_presence=False)
+        _, trunk_on = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_presence=True)
+        assert trunk_off == trunk_on == 1.0
 
-    def test_stem_trunk_credit_mixed_stem_and_ab(self) -> None:
-        """Mixed stem+AB trunk: AB cells full weight, stems partial weight."""
+    def test_stem_trunk_presence_mixed_stem_and_ab(self) -> None:
+        """Mixed stem+AB trunk with presence=True → full score (all counted)."""
         target = _t_target()
         grid = _empty_grid(7, 7)
         grid[1, 1:6] = CELL_A  # full bar
-        # trunk has 4 cells: 2 A/B + 2 stems
         grid[2, 3] = CELL_B
         grid[3, 3] = CELL_B
         grid[4, 3] = CELL_STEM
         grid[5, 3] = CELL_STEM
         ab = torch.logical_or(grid == CELL_A, grid == CELL_B)
-        _, trunk = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_credit=0.5)
-        # Expected contribution: (1+1+0.5+0.5)/4 = 0.75 for coverage/continuity
-        # Full score should be between AB-only (1.0) and stem-only (0.5)
-        assert 0.5 < trunk < 1.0
+        _, trunk = _compute_t_diagnostics(ab, target, grid=grid, stem_trunk_presence=True)
+        # All 4 trunk cells present (2 AB + 2 stem) → perfect
+        assert trunk == 1.0
 
 
 # -----------------------------------------------------------------------------

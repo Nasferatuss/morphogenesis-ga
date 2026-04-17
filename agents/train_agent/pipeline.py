@@ -197,6 +197,8 @@ def train_ga(
 
     stem_trunk_discount = float(fitness_cfg.get("stem_trunk_discount", 0.0))
 
+    stem_trunk_presence = bool(fitness_cfg.get("stem_trunk_presence", False))
+
     late_t_cfg = fitness_cfg.get("late_t", {})
 
     late_fp_multiplier = float(late_t_cfg.get("fp_multiplier", 1.0))
@@ -1218,6 +1220,8 @@ def train_ga(
                 stem_trunk_bonus_weight=stem_trunk_bonus_weight if enable_t_metrics else 0.0,
 
                 stem_trunk_discount=stem_trunk_discount if enable_t_metrics else 0.0,
+
+                stem_trunk_presence=stem_trunk_presence if enable_t_metrics else False,
 
             )
 

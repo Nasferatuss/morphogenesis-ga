@@ -73,15 +73,16 @@ def _compute_t_diagnostics(
     ab_mask: torch.Tensor,
     target_mask: torch.Tensor,
     grid: Optional[torch.Tensor] = None,
-    stem_trunk_credit: float = 0.0,
+    stem_trunk_presence: bool = False,
 ) -> Tuple[float, float]:
     """Compute T-shape symmetry and trunk continuity scores.
 
-    When *grid* is provided and *stem_trunk_credit* > 0, stem cells
-    (CELL_STEM) in the trunk column count as partial presence with
-    weight *stem_trunk_credit* (0..1). A/B cells always count as 1.0.
-    This gives the GA a gradient toward trunk construction via the
-    intermediate DIVIDE_S → stem → BECOME_B pathway.
+    When *grid* is provided and *stem_trunk_presence* is True, stem cells
+    (CELL_STEM) in the trunk column count as full presence (same as A/B).
+    This gives the GA a strong binary signal: "anything in the trunk column
+    is good", encouraging DIVIDE_S → stem placement as a first step toward
+    trunk construction. GA cannot optimize subtle weighted gradients within
+    its generational budget, so binary presence outperforms weighted credit.
     """
     target_bool = target_mask.to(dtype=torch.bool)
     if target_bool.sum().item() <= 0:
@@ -129,45 +130,36 @@ def _compute_t_diagnostics(
     if trunk_len <= 0:
         return symmetry_score, 0.0
 
-    # Build a weighted presence vector: A/B = 1.0, stem = stem_trunk_credit
+    # Binary presence vector: A/B = True, stem = True (if enabled)
     pred_trunk_ab = ab_mask[bar_row + 1 :, trunk_col]
-    _credit = min(1.0, max(0.0, stem_trunk_credit))
-    if _credit > 0.0 and grid is not None:
+    if stem_trunk_presence and grid is not None:
         pred_trunk_stem = (grid[bar_row + 1 :, trunk_col] == CELL_STEM)
-        # Weighted presence: 1.0 for A/B, stem_trunk_credit for stem
-        trunk_presence = pred_trunk_ab.to(dtype=torch.float32) + _credit * pred_trunk_stem.to(dtype=torch.float32)
-        trunk_presence = torch.clamp(trunk_presence, 0.0, 1.0)
+        trunk_present = torch.logical_or(pred_trunk_ab, pred_trunk_stem)
     else:
-        trunk_presence = pred_trunk_ab.to(dtype=torch.float32)
+        trunk_present = pred_trunk_ab
 
-    # Weighted coverage: sum of presence magnitudes at target cells.
-    # A/B contributes 1.0, stem contributes stem_trunk_credit (0..1).
-    # Previously this used `presence > 0.0` which collapsed all non-zero
-    # credit values to binary — the credit magnitude was silently ignored.
-    trunk_target_float = trunk_target.to(dtype=torch.float32)
+    trunk_target_bool = trunk_target.to(dtype=torch.bool)
     coverage = 0.0
     if trunk_len > 0:
-        coverage = float((trunk_presence * trunk_target_float).sum().item()) / float(trunk_len)
+        coverage = float(torch.logical_and(trunk_present, trunk_target_bool).sum().item()) / float(trunk_len)
 
-    # Weighted continuity: sum of presence magnitudes within the longest
-    # consecutive run of (presence > 0) at target cells. Preserves the
-    # "longer consecutive trunk is better" signal while respecting credit.
-    presence_values = trunk_presence.to("cpu").tolist()
-    target_list = trunk_target.to(dtype=torch.bool).to("cpu").tolist()
-    longest_run_sum = 0.0
-    current_run_sum = 0.0
-    for pres_val, target_val in zip(presence_values, target_list):
+    # Continuity: longest consecutive run of presence in trunk target cells
+    presence_list = trunk_present.to("cpu").tolist()
+    target_list = trunk_target_bool.to("cpu").tolist()
+    longest_run = 0
+    current_run = 0
+    for pres_val, target_val in zip(presence_list, target_list):
         if not target_val:
             continue
-        if pres_val > 0.0:
-            current_run_sum += float(pres_val)
+        if pres_val:
+            current_run += 1
         else:
-            if current_run_sum > longest_run_sum:
-                longest_run_sum = current_run_sum
-            current_run_sum = 0.0
-    if current_run_sum > longest_run_sum:
-        longest_run_sum = current_run_sum
-    continuity = longest_run_sum / float(trunk_len) if trunk_len > 0 else 0.0
+            if current_run > longest_run:
+                longest_run = current_run
+            current_run = 0
+    if current_run > longest_run:
+        longest_run = current_run
+    continuity = float(longest_run) / float(trunk_len) if trunk_len > 0 else 0.0
     trunk_score = max(0.0, min(1.0, 0.5 * (coverage + continuity)))
     return symmetry_score, trunk_score
 
@@ -420,7 +412,7 @@ def compute_fitness(
     late_t_enforce: Optional[Dict[str, float]] = None,
     stem_trunk_bonus_weight: float = 0.0,
     stem_trunk_discount: float = 0.0,
-    stem_trunk_credit: float = 0.0,
+    stem_trunk_presence: bool = False,
 ) -> Dict[str, float]:
     ab_mask = torch.logical_or(grid == CELL_A, grid == CELL_B)
     target_tensor = target_mask.to(device=grid.device)
@@ -717,7 +709,7 @@ def compute_fitness(
     t_symmetry, t_trunk_continuity = _compute_t_diagnostics(
         ab_mask, target_bool,
         grid=grid if expect_t_shape else None,
-        stem_trunk_credit=stem_trunk_credit if expect_t_shape else 0.0,
+        stem_trunk_presence=stem_trunk_presence if expect_t_shape else False,
     )
     symmetry_weight = max(0.0, float(t_symmetry_weight))
     trunk_weight = max(0.0, float(t_trunk_weight))
