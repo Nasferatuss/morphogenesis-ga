@@ -7,7 +7,18 @@ __pycache__/
 *.pyo
 
 # Training artifacts
-runs/
+runs/*
+
+# Exception: small artefacts needed by docs/habr_article.md render scripts
+# (legacy 0.329 baseline + 0.440 champion checkpoints + champion gens.csv)
+!runs/champion_hpo_v1/
+runs/champion_hpo_v1/*
+!runs/champion_hpo_v1/best.pt
+!runs/champion_hpo_v1/generations.csv
+!runs/exp_directional_presence_v1_20260419_210734/
+runs/exp_directional_presence_v1_20260419_210734/*
+!runs/exp_directional_presence_v1_20260419_210734/best_t.pt
+!runs/exp_directional_presence_v1_20260419_210734/generations.csv
 
 # IDE
 .idea/
