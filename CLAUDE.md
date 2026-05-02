@@ -1,50 +1,56 @@
 # Morphogenesis-GA — Claude Code Project Guide
 
-This file provides guidance to Claude Code when working with this repository.
+This file is the operational guide for Claude Code in this repository.
+Heavyweight governance lives in dedicated rule files — read them before
+planning non-trivial work.
 
-> ⚠️ **Roadmap source of truth: Notion, not this file.**
-> Before planning any work, read both canonical pages:
-> - [🌍 Дорожная карта]([redacted]) — 7-phase product roadmap (sprints + phases)
-> - [🔬 Research & Ops Backlog]([redacted]) — parallel Kanban track (R&D spikes, reliability, infra)
+> **Must-read rule files** (under [`.claude/rules/`](.claude/rules/)):
+> - [`experimental-findings.md`](.claude/rules/experimental-findings.md)
+>   — locked baseline, 10 critical gotchas, champion recipe. Read before
+>   proposing any training run, HPO sweep, or ablation.
+> - [`roadmap-status.md`](.claude/rules/roadmap-status.md) — Notion-backed
+>   7-phase roadmap + current Sprint status + R&D Kanban mapping. Read
+>   before planning feature work.
 >
-> Both live under [🧮 Morphogenesis-GA]([redacted]).
+> **Live experiment state:** [`docs/DECISION_2026-04-19.md`](docs/DECISION_2026-04-19.md)
+> is the running log of experiments, dead ends, open questions, and the
+> single next experiment. If this file and the Decision Doc disagree,
+> the Decision Doc wins.
 >
-> An older 5-phase "technical subcard" used to live in this file. Its items
-> (NSGA-II, adaptive mutation, HPO, test hardening, PyPI/Docker/HF Space)
-> are **not obsolete** — they are cross-cutting R&D and release concerns
-> that overlay the Notion sprints, tracked in the Research & Ops Backlog
-> above. See the [Cross-cutting tracks](#cross-cutting-tracks) section
-> below for the full mapping.
+> **Roadmap source of truth:** Notion —
+> [🌍 Дорожная карта]([redacted])
+> and [🔬 Research & Ops Backlog]([redacted]),
+> both under [🧮 Morphogenesis-GA]([redacted]).
 
 ---
 
 ## Project Overview
 
 **Morphogenesis-GA** (public name: _Morphogenesis-GA_ /
-internal: _Morphogenesis-GA_) is a neuroevolution platform
-that evolves neural network controllers (LittleLM transformers) to govern
-cellular self-organization into target morphologies. Genetic algorithms train
-populations of micro-controllers; each cell reads 8 neighbors and chooses an
-action (stay, differentiate A/B, divide, die). The system uses curriculum
-learning to progressively evolve toward complex shapes.
+internal: _Morphogenesis-GA_) is a neuroevolution
+platform that evolves neural network controllers (LittleLM transformers)
+to govern cellular self-organization into target morphologies. Genetic
+algorithms train populations of micro-controllers; each cell reads 8
+neighbours and chooses an action (stay, differentiate A/B, divide N/S/E/W,
+die). The system uses curriculum learning to progressively evolve toward
+complex shapes.
 
-**North Star Metric (per Notion):** _Scenario Success Rate (SSR)_ — the
-fraction of benchmark scenarios in which the policy reaches the target,
-holds it under noise, recovers from damage, and does so within a step
-budget. Not just "pretty GIF" — reproducible, measurable robustness.
+**North Star Metric:** _Scenario Success Rate (SSR)_ — fraction of
+benchmark scenarios in which the policy reaches the target, holds it
+under noise, recovers from damage, within a step budget. Not just a
+"pretty GIF" — reproducible, measurable robustness.
 
-**Strategic framing:** the current `cross → T` curriculum is a _benchmark_,
-not the final product. The product target is an **interactive sandbox**
-with programmable self-organization, self-healing demos, and explainable
+**Strategic framing:** the `cross → T` curriculum is a _benchmark_, not
+the final product. The product target is an **interactive sandbox** with
+programmable self-organization, self-healing demos, and explainable
 reports.
 
 ## Architecture (current state, post Sprint 1A refactor)
 
 ```
 run_train.py                      — Thin CLI (~112 lines): parse_args + main
-                                    dispatches to core/agents pipelines
 src/                              — Legacy domain primitives (stable, well-tested)
-  world.py                        — 2D grid simulation (World class, cell types)
+  world.py                        — 2D grid simulation (with directional divide actions)
   model.py                        — LittleLM transformer controller
   ga.py                           — GA engine (selection, crossover, mutation)
   simulate.py                     — Step-by-step simulation loop (93% cov)
@@ -53,47 +59,46 @@ src/                              — Legacy domain primitives (stable, well-tes
   viz.py                          — Pygame renderer + GIF recording
   benchmark.py                    — Multi-seed evaluation framework (99% cov)
   utils.py                        — Seed, device, run directory helpers
-core/                             — Service-Oriented Core (Phase 2 Sprint 1A)
-  services/
-    simulator.py                  — run_single_simulation (was in run_train.py)
-    config_loader.py              — YAML config loading & validation
-    factory.py                    — prepare_world, prepare_model, stability cfg
-    cleanup.py                    — Late-cleanup ratio computation
-    stats.py                      — Summarization helpers
-    writer.py                     — TensorBoard SummaryWriter + run dir
-    visualizer.py                 — Pygame Visualizer factory
-  memory/
-    metrics_logger.py             — CSV/JSON/TensorBoard plot export (98% cov)
-agents/                           — Business-logic pipelines
+core/
+  services/                       — simulator, config_loader, factory, cleanup,
+                                    stats, writer, visualizer, hpo, benchmark_runner,
+                                    mini_transfer
+  memory/                         — metrics_logger, mlflow_tracker (soft dependency)
+agents/
   train_agent/
-    pipeline.py                   — Full train_ga (3640 lines, 21 closures;
-                                    follow-up decomposition pending)
-    mutation.py                   — Mutation std + stem penalty schedules
-    scoring.py                    — Benchmark score composition
-    t_weights.py                  — T-phase structure weight scaling
+    pipeline.py                   — train_ga (closures 21 → 17, Round 4 deferred)
+    mutation.py, scoring.py, t_weights.py, adaptive_mutation.py
+    evaluator.py / EvaluatorState — extracted via 495a42b
   eval_agent/
     pipeline.py                   — play_best checkpoint replay (98% cov)
+benchmarks/
+  cross/, t_shape/                — formal specs (57302d6, Sprint 1B partial)
 configs/                          — YAML experiment configurations
 runs/                             — Training artifacts (gitignored)
-tests/                            — pytest suite, 223 tests, 79–89% coverage
-  test_golden.py                  — Reproducibility safety net (bit-identical)
-  test_fitness.py, test_simulate.py, test_benchmark.py, ...
+scripts/
+  multiseed_bench.py              — Multi-seed IoU benchmark (CLI)
+  build_leaderboard.py            — Rank every runs/*/best.pt by MS mean
+  dump_grid.py                    — ASCII viz of final grid
+  hpo_sweep.py                    — Optuna HPO CLI
+tests/                            — pytest: 311 fast + 9 v1 anchors + 33 v2 anchors
 docs/
-  adr/                            — Architectural decisions (5 ADRs)
-  phase0_audit_report.md          — Pre-refactor audit (2026-04-09)
+  adr/                            — 5 architectural decisions
+  benchmarks/                     — baseline_v1.md, baseline_v2.md
+  research/                       — hpo_v1_report.md, hpo_v2_report.md, adaptive_mutation_report.md
+  DECISION_2026-04-19.md          — Live experiment decision loop
 ```
 
-**What does NOT yet exist** (per Notion target, see Roadmap below):
-`core/brain/`, `core/domain/`, `core/workflows/` (Temporal), `core/api/`
-(FastAPI routes), `frontend/` (Next.js), `benchmarks/` (formal folders),
-`datasets/`, full `infra/`. These are Sprint 1B → Sprint 3 work.
+**What does NOT yet exist:** `core/brain/`, `core/domain/`,
+`core/workflows/` (Temporal), `core/api/` (FastAPI), `frontend/`
+(Next.js 16), full `benchmarks/{damage_recover,noisy_hold,multi_target}`,
+`datasets/`, full `infra/`. See [`roadmap-status.md`](.claude/rules/roadmap-status.md).
 
 ## Key Commands
 
 ```bash
-# Environment setup (pyproject.toml exists)
+# Environment setup
 python -m venv .venv && .venv\Scripts\activate
-pip install -e ".[viz,tb,dev]"
+pip install -e ".[viz,tb,dev,hpo]"
 
 # Smoke test (no training, no viz)
 python run_train.py --config configs/baseline_T.yaml --steps 0 --no-viz
@@ -102,10 +107,13 @@ python run_train.py --config configs/baseline_T.yaml --steps 0 --no-viz
 python run_train.py --config configs/curriculum_smoke.yaml --train-ga --no-viz
 
 # Full curriculum training
-python run_train.py --config configs/curriculum.yaml --train-ga
+python run_train.py --config configs/curriculum_hpo_v1.yaml --train-ga
 
 # Replay best model
 python run_train.py --play-best runs/<run_id>/best.pt
+
+# Multi-seed benchmark (MANDATORY before declaring a new champion)
+python scripts/multiseed_bench.py runs/<run_id>/best.pt
 
 # TensorBoard
 tensorboard --logdir runs --port 6006
@@ -133,18 +141,19 @@ mypy src/ core/ agents/ --ignore-missing-imports
 - Framework: `pytest` with `pytest-cov`, `pytest-benchmark`
 - Seed determinism: use `utils.set_seed()` so GA mutations replicate
 - **Golden tests** in `tests/test_golden.py` are the refactor safety net —
-  run them after any change touching `src/`, `core/`, or `agents/`
+  run them after any change touching `src/`, `core/`, or `agents/`.
+  Current anchors: `TestGoldenBaselineV1` (9 @ 1e-9, CPU) +
+  `TestGoldenBaselineV2` (33 @ 1e-6, CUDA)
 - Integration: `python run_train.py --config configs/curriculum_smoke.yaml --train-ga --no-viz`
-- Coverage: currently **79% total** (89% if you exclude `agents/train_agent/pipeline.py`
-  which is 63% pending closure decomposition). Target: ≥80% for any module you touch.
-- **Test hardening is NOT considered done** — continuing as a Priority 1
-  item in [🔬 Research & Ops Backlog]([redacted]).
-  Reproducibility audit (baseline freeze + extended golden anchors) is the
-  immediate next task on that track — see [`docs/research_backlog.md`](docs/research_backlog.md).
+- Coverage: **79% total** (89% excluding `agents/train_agent/pipeline.py`
+  which is 63% pending Round 4 closure decomposition). Target: ≥80% for
+  any module you touch.
+- Test hardening is ongoing as R&D Priority 1 — see
+  [`roadmap-status.md`](.claude/rules/roadmap-status.md).
 
 ## Git & PR Conventions
 
-- Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`
+- Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`
 - Never commit: `.venv/`, `runs/`, `__pycache__/`, `*.pyc`
 - PRs: link Notion phase/sprint, list modified configs, attach IoU/fitness
   deltas and GIFs, show `pytest` + golden-test + smoke-test results
@@ -155,165 +164,46 @@ mypy src/ core/ agents/ --ignore-missing-imports
 - `logging.run_name` in config must be descriptive for traceability
 - Artifacts: `runs/<name>_<timestamp>/` → `best.pt`, `generations.csv`, `gifs/`, TensorBoard
 - Clean stale TensorBoard event files before new sweeps
-- **MLflow** is the Notion-specified canonical tracker for Phase 2+ (not yet wired)
+- **MLflow** soft-dependency landed via `c349da8`; pipeline wiring
+  deferred (RNG drift risk vs baseline v2 anchors)
 - **W&B** is optional for public showcase runs
+- Before any new training run: satisfy the **Pre-Experiment Gate** in
+  [`.claude/skills/experiment-config/SKILL.md`](.claude/skills/experiment-config/SKILL.md)
+  (read Decision Doc, write hypothesis, define success criterion)
 
----
+### Experiment Journal convention
 
-## Experimental findings locked in 2026-04-10
+Every training run with a fitness-delta hypothesis is recorded in a
+dated Decision Doc. This replaces the 2026-04-12 → 2026-04-19 pattern of
+experiments scattered across commits, configs, and memory with no single
+log.
 
-> ⚠️ Read these before proposing new experiments, HPO sweeps, or ablations.
-> Full details in [`docs/HANDOFF_2026-04-10.md`](docs/HANDOFF_2026-04-10.md),
-> [`docs/leaderboard.md`](docs/leaderboard.md),
-> [`docs/visual_diagnosis_2026-04-10.md`](docs/visual_diagnosis_2026-04-10.md),
-> [`docs/plateau_analysis_2026-04-10.md`](docs/plateau_analysis_2026-04-10.md).
-
-**Current best:** `runs/exp_t_strong_iou_20260410_103312/best.pt` — multi-seed
-mean IoU = **0.339** across 10 world seeds (reach≥0.30 = 100%, reach≥0.40 = 0%).
-Config: [`configs/exp_t_stabilize.yaml`](configs/exp_t_stabilize.yaml).
-
-**Top architectural finding:** `use_position: true` on `LittleLM` (from commit
-`28a56a1`) gives **+124% average IoU** across all 73 historical checkpoints
-(positional models avg 0.290, legacy avg 0.130). Always set it when training
-new models.
-
-**Critical gotchas (learned the hard way):**
-
-1. **Training peak IoU is misleading — always multi-seed benchmark.** Use
-   [`scripts/multiseed_bench.py <checkpoint>`](scripts/multiseed_bench.py).
-   `sweep_a2_*` had training peak 0.375 but MS mean 0.251 (overfit to a lucky
-   training seed). Never declare a champion from training peak alone.
-
-2. **Do NOT "fix" varying `world_seed` in evaluator to be constant per
-   generation.** It looks like a bug (one model, different seeds each gen),
-   but it's a free regularizer. Locking the seed regressed IoU from 0.41 to
-   0.26. See [`docs/experiment_report_2026-04-10.md`](docs/experiment_report_2026-04-10.md) Exp 7.
-
-3. **`t_trunk_weight` is a dead hyperparameter** at the current action space.
-   6-config sweep proved `t15 ≡ t30` bit-identically. GA physically cannot
-   build a T trunk with random-direction `ACTION_DIVIDE`, so the weight never
-   activates. **Exclude from HPO search spaces.**
-
-4. **Adaptive mutation alone is useless without positional encoding.** All 4
-   `ablation_adaptive_*` runs scored MS mean 0.134 — identical to legacy
-   baseline. Positional encoding was the fix, not adaptive mutation. Test
-   adaptive mutation ONLY in combination with `use_position: true`.
-
-5. **Champion regression is real.** Every long run (40+ gens) ends with final
-   IoU lower than peak IoU. The `exp_t_long_champion_20260410_172908` (120
-   gens) peaked at 0.389 @ gen 75 but ended at 0.342 (−0.047) and
-   multi-seed-benchmarked at MS mean 0.325 — **worse** than 40-gen variants.
-   Don't train longer hoping to break the ceiling. Longer ≠ better.
-
-6. **Structural bar-vs-trunk dilemma is the real ceiling.** No checkpoint in
-   project history achieves both the T horizontal bar and the vertical trunk
-   simultaneously — they require opposing growth strategies. This is the
-   0.40 MS IoU ceiling. **Unblocking requires directional divide actions**
-   (`ACTION_DIVIDE_N/S/E/W` in `src/world.py`) — a `world.py` + `model.py`
-   change, blocked only until the parallel refactor session agrees.
-
-**Champion config recipe that works:**
-- `use_position: true`
-- `alpha_fp: 2.5`, `beta_fn: 2.0`, `gamma_area: 0.5`
-- `steps: 200` (NOT 400 — overflow returns)
-- 3-phase `die_cap_schedule`: grow (0.20) → shape (0.40) → **gentle** clean (0.35, NOT 0.85)
-- `late_cleanup_start_frac: 0.75`
-- ~40 generations is enough; plateau_patience ≥ 40
-
-**Convergence speed by `alpha_fp`** (from 6-config sweep plateau analysis):
-- `alpha_fp=2.0` → peak gen 16 (don't run > 25 gens, waste)
-- `alpha_fp=2.5` → peak gen 28 (current sweet spot)
-- `alpha_fp=3.0` → peak gen 38 (but −19% regression after peak)
-
-**Reusable analysis scripts** (for the next session / HPO winner validation):
-- `scripts/multiseed_bench.py` — standalone multi-seed IoU benchmark
-- `scripts/build_leaderboard.py` — ranks every `runs/*/best.pt` by MS mean
-- `scripts/dump_grid.py` — ASCII visualization of a model's final grid
-
----
-
-## Roadmap (source of truth: Notion)
-
-**Canonical page:** [🌍 Дорожная карта]([redacted])
-(inside [🧮 Morphogenesis-GA]([redacted]))
-
-**Methodology:** Hybrid Agile — Discovery + Architecture Gate + 2-week
-Scrum sprints + Kanban for research/ops. MVP window: **4–6 weeks**.
-
-### Phase map (7 phases)
-
-| Phase | Name | Duration | Key Deliverables |
-|---|---|---|---|
-| **0** | Discovery & Reframing | 3–5 days | Vision doc v1, Product one-pager, Benchmark ladder v1, ADR-001 positioning, Licensing memo |
-| **1** | Architecture & Benchmark Design | 4–5 days | Service-oriented core scaffold, API contract draft, `benchmark_spec.md`, `dataset_candidates.md` |
-| **2** | Development Sprint 1 (weeks 1–2) | 2 weeks | **1A** Core Runtime (`core/services/simulation_service`) · **1B** Benchmark Base (formal `benchmarks/cross`, `benchmarks/t_shape`, deterministic evals) · **1C** Basic FastAPI (`/runs`, `/benchmarks`, `/artifacts`, `/health`) · **1D** Next.js 16 frontend shell |
-| **3** | Development Sprint 2 (weeks 3–4) | 2 weeks | Damage & Recover benchmark · Metrics Layer (SSR schema) · Interactive Controls (Canvas/WebGL) · Temporal async jobs |
-| **4** | Development Sprint 3 (weeks 5–6) | 2 weeks | Report Agent (LLM) · Multi-target Conditioning Lite · Shareable hosted demo · OpenTelemetry/Grafana/Loki/Sentry observability |
-| **5** | QA / Validation / Demo Readiness | 3–4 days | Regression tests, Playwright UI, benchmark freeze, demo script |
-| **6** | Launch | 2–3 days | Public repo + hosted demo + outreach assets |
-| **7** | Post-Launch | 30–60 days | Community loop, verticalization discovery, dataset track, enterprise readiness |
-
-### Current status (as of 2026-04-10)
-
-We are in the middle of **Phase 2, Sprint 1**.
-
-| Sprint | Status | Notes |
-|---|---|---|
-| Phase 0 Discovery | 🟡 partial | ADRs exist; vision doc + licensing memo + benchmark ladder v1 — missing |
-| Phase 1 Architecture & Benchmark Design | 🟡 partial | SOC scaffold exists (`core/services/`, `agents/`); `benchmark_spec.md`, `dataset_candidates.md`, API contract draft — missing |
-| **Phase 2 Sprint 1A** Core Runtime | 🟢 ~90% | `run_train.py` shrunk 4933 → 112 lines. `core/services/simulator.py`, `config_loader`, `factory`, `cleanup`, `stats`, `writer`, `visualizer` all extracted. Follow-up: decompose 21 closures inside `agents/train_agent/pipeline.py` into reusable services (`training_service`, `artifact_service` boundaries) |
-| **Phase 2 Sprint 1B** Benchmark Base | 🟡 ~30% | `src/benchmark.py` exists (99% cov) but not yet formalized as `benchmarks/cross/spec.yaml` + `benchmarks/t_shape/spec.yaml` folders. `benchmark_spec.md` doc — missing. Deterministic eval registry — missing |
-| **Phase 2 Sprint 1C** Basic API | ❌ 0% | No FastAPI, no `/runs`, `/benchmarks`, `/artifacts`, `/health` endpoints yet |
-| **Phase 2 Sprint 1D** Frontend Shell | ❌ 0% | No Next.js 16 / React / Tailwind / PixiJS frontend |
-| Phase 3 | ❌ 0% | Damage & Recover not started; Temporal not introduced |
-| Phase 4 | ❌ 0% | Report Agent / multi-target / observability not started |
-| Phase 5–7 | ❌ 0% | |
-
-### What has NOT been done despite past session claims
-
-Earlier sessions reported "Phase 1 closed" — that was in the terminology of
-an obsolete 5-phase technical subcard that lived in this file. In Notion
-terms, the accurate statement is: **Sprint 1A of Phase 2 is ~90% complete;
-Sprint 1B is ~30%; Sprint 1C and 1D are untouched.** Phases 3–7 are all
-future work.
-
-### Target directory layout (per Notion, for orientation)
-
-```
-core/
-  brain/            ← policy_compiler, conditioning, reward_specs, report_reasoner (NOT YET)
-  memory/           ← postgres, redis, object_store, run_registry (only metrics_logger today)
-  services/         ← simulation_service, training_service, benchmark_service,
-                      artifact_service, report_service, calibration_service,
-                      telemetry_service, auth_service (only ~half done)
-  domain/           ← envs, policies, tasks, metrics, validators (NOT YET)
-  workflows/        ← temporal_{train,eval,report}_workflow (NOT YET)
-  api/              ← routes_runs, routes_benchmarks, routes_reports, routes_artifacts (NOT YET)
-agents/
-  sandbox_agent/    ← (we have train_agent + eval_agent instead — rename pending)
-  report_agent/     ← (NOT YET)
-  devtools_agent/   ← (NOT YET)
-frontend/           ← Next.js 16 (NOT YET)
-benchmarks/{cross,t_shape,damage_recover,noisy_hold,multi_target}/  ← (NOT YET)
-datasets/           ← synthetic, real_world_candidates, calibration (NOT YET)
-infra/{docker,k8s,terraform,github_actions}/  ← (partial — only .github/)
-docs/{architecture,product,benchmarks,adr,investor_pack}/  ← (only adr/ today)
-```
-
-### Planning conventions
-
-- Before starting any feature work, **cross-reference the Notion roadmap**
-  and identify which Sprint/Phase the work falls under.
-- When writing PR descriptions and commit messages, use Notion phase
-  terminology (e.g. "Phase 2 Sprint 1B: Formalize T benchmark"), not the
-  old 5-phase technical subcard.
-- If a task does not cleanly map to a Notion phase, that is a signal to
-  either defer it or raise it with the product owner rather than inventing
-  a parallel track.
-- **Reproducibility** is a non-negotiable throughout: same seed must
-  produce identical fitness trajectory ±0.001. Golden tests enforce this.
-
----
+- **Active journal:** [`docs/DECISION_2026-04-19.md`](docs/DECISION_2026-04-19.md)
+  — §2 experiments table, §3 dead ends, §4 open questions, §5 next
+  experiment.
+- **New entries** go in the current journal until §2 exceeds ~25 rows
+  or a month has passed. Then start a successor
+  `docs/DECISION_YYYY-MM-DD.md` that opens with "Supersedes
+  [previous]" and carries forward §1 (baseline), §3 (dead ends), §4
+  (open questions). Update the strategic memory pointer to the new
+  file.
+- **Workflow:** the [`experiment-loop`](.claude/skills/experiment-loop/SKILL.md)
+  skill enforces the 8 steps (hypothesis → prior check → success
+  criterion → config → diff → run+bench → record → decide). Step 7
+  appends the journal row; step 8 updates §3/§4.
+- **Read-only snapshot:** `/strategy` command
+  ([`.claude/commands/strategy.md`](.claude/commands/strategy.md))
+  reports the current locked baseline, dead ends, open questions, and
+  next experiment in under 30 seconds. Use at the start of any session
+  that might launch a training run.
+- **Benchmark delta:** `scripts/multiseed_bench.py` accepts
+  `--baseline-iou` (default 0.329, the locked MS-10) and prints the
+  delta vs baseline in the report — use it in step 7 instead of
+  restating the absolute IoU.
+- **Stop-hook reminder:** a post-turn hook
+  (`scripts/hooks/decision-doc-reminder.sh`) flags sessions that
+  touched `configs/exp_*`, `configs/curriculum_*`, or `runs/` without
+  updating the Decision Doc or strategic memory.
 
 ## Custom Agents (`.claude/agents/`)
 
@@ -340,7 +230,8 @@ docs/{architecture,product,benchmarks,adr,investor_pack}/  ← (only adr/ today)
 
 ## Skills
 
-Use the following skills when working on related files:
+Skill descriptions are TRIGGER-based — each skill's `SKILL.md` declares
+the exact conditions under which it should activate.
 
 | File(s) | Skill |
 |---------|-------|
@@ -348,78 +239,20 @@ Use the following skills when working on related files:
 | `src/fitness.py`, metrics | `fitness-engineering` |
 | `src/model.py`, LittleLM | `pytorch-patterns` |
 | `tests/**` | `tdd-workflow` |
-| `configs/*.yaml` | `experiment-config` |
+| `configs/*.yaml`, new experiment requests | `experiment-config` |
 | `run_train.py`, `core/`, `agents/` refactoring | `python-refactoring` |
 
 ## Important Constraints
 
-- **Reproducibility**: Same seed must produce identical fitness trajectory ±0.001
-- **No breaking changes**: Existing configs must produce identical results after refactoring
-- **GPU awareness**: Code must work on both CPU and CUDA; use `utils.select_device()`
+- **Reproducibility**: Same seed must produce identical fitness trajectory
+  ±0.001 (golden anchors: 1e-9 for v1 CPU, 1e-6 for v2 CUDA)
+- **No breaking changes**: Existing configs must produce identical results
+  after refactoring
+- **GPU awareness**: Code must work on both CPU and CUDA; use
+  `utils.select_device()`
 - **Memory**: Population evaluation can be memory-intensive; batch when possible
-- **Windows primary**: Development environment is Windows 11; use forward slashes in code paths
-- **Parallel experiments**: A separate window may be running GA experiments — refactors
-  are safe because Python caches modules at import, but do not touch `runs/` directories
-  while experiments are live
-
----
-
-## Cross-cutting tracks
-
-An earlier autogenerated version of this file contained a 5-phase
-"technical subcard" roadmap. Its items (NSGA-II, adaptive mutation, HPO,
-test hardening, v1.0 release infrastructure) are **NOT obsolete** — they
-are real cross-cutting concerns that **overlay** the Notion 7-phase
-product roadmap and run on a parallel Kanban track.
-
-**Canonical R&D backlog:** [🔬 Research & Ops Backlog]([redacted])
-**Local mirror:** [`docs/research_backlog.md`](docs/research_backlog.md)
-
-### Why they live in a parallel track
-
-Notion roadmap methodology explicitly calls for Kanban alongside Scrum:
-
-> _«У тебя есть исследовательская неопределённость: надо одновременно
-> развивать эксперимент и продуктовую упаковку. [...] Параллельно:
-> Kanban-доска для датасетов, R&D, benchmark backlog, infra/devops.»_
-
-The old `CLAUDE.md` framing collapsed these into sequential phases, which
-doesn't match how research + product work actually interact. The Research
-& Ops Backlog restores the parallel structure.
-
-### Mapping: old 5-phase items → current home
-
-| Old `CLAUDE.md` item | Lives in | Status |
-|---|---|---|
-| Phase 0: Code audit + archaeology | Done — `docs/phase0_audit_report.md`, 5 ADRs | 🟢 |
-| Phase 1: Refactor `run_train.py` monolith | Notion Phase 2 **Sprint 1A Core Runtime** | 🟢 ~90% |
-| Phase 2: NSGA-II multi-objective GA | R&D Backlog — Priority 2.3 (after HPO) | 🔵 blocked on HPO |
-| Phase 2: Adaptive mutation std | R&D Backlog — Priority 2.1 (**next after reproducibility**) | 🔴 |
-| Phase 2: Hyperparameter optimization | R&D Backlog — Priority 2.2 | 🔵 blocked on reproducibility |
-| Phase 3: Test hardening ≥80% coverage | R&D Backlog — Priority 1 (ongoing) | 🟡 79%, not closed |
-| Phase 3: Reproducibility audit | R&D Backlog — Priority 1 (**active now**) | 🔴 next task |
-| Phase 4: v1.0 PyPI release | Notion Phase 6 Launch — Soft Launch | 🔵 |
-| Phase 4: v1.0 Docker image | Notion Tech Stack + Phase 6 | 🔵 |
-| Phase 4: v1.0 HF Space demo | Notion Phase 6 Launch — Shareable Demo | 🔵 |
-
-### Immediate execution order (strict)
-
-1. **Now** → Reproducibility audit + baseline freeze *(R&D Priority 1, 1 session)*
-2. → Adaptive mutation std *(R&D Priority 2.1, 1–2 sessions)*
-3. → Hyperparameter optimization with Optuna *(R&D Priority 2.2, 2–3 sessions)*
-4. → NSGA-II multi-objective GA *(R&D Priority 2.3, 2–3 sessions, optional)*
-5. → MLflow + seed-reproducibility CI job *(parallel, opportunistic)*
-6. → Docker / PyPI / HF Space demo *(Notion Phase 6 Launch prep)*
-
-Notion sprints 1B/1C/1D continue independently of this track. R&D work
-never blocks sprint work and vice versa.
-
-### How future sessions should reason about this
-
-- **Sprint feature work** → look at the Notion 7-phase map
-- **R&D / reliability / release infra** → look at the Research & Ops Backlog
-- If a task doesn't cleanly belong to either, raise it as a question
-  before inventing a third track.
-- If a session starts quoting the old 5-phase numbering (e.g. "Phase 2 =
-  NSGA-II"), that's a signal it's working from stale CLAUDE.md context
-  and should re-read the two Notion pages before planning.
+- **Windows primary**: Development environment is Windows 11; use forward
+  slashes in code paths
+- **Parallel experiments**: A separate window may be running GA experiments —
+  refactors are safe because Python caches modules at import, but do not
+  touch `runs/` directories while experiments are live
