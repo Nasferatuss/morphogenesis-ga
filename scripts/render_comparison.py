@@ -39,6 +39,11 @@ def load_model(ckpt_path: Path) -> LittleLM:
     has_spatial = any(k.startswith("spatial_proj") for k in ckpt)
     embed_dim = int(ckpt["token_embed.weight"].shape[1]) if "token_embed.weight" in ckpt else 32
     model = LittleLM(embed_dim=embed_dim, num_heads=4, use_position=has_spatial)
+    # Legacy checkpoints (pre bc0490a) have head with 5 actions; new ones have 9.
+    ckpt_actions = int(ckpt["head.weight"].shape[0])
+    if ckpt_actions != model.head.out_features:
+        import torch.nn as nn
+        model.head = nn.Linear(embed_dim, ckpt_actions)
     model.load_state_dict(ckpt, strict=False)
     model.eval()
     return model
