@@ -86,11 +86,16 @@ def run_benchmark(
     return results
 
 
-def print_report(results: List[Tuple[int, float, float]], checkpoint_path: Path) -> None:
-    """Print a one-screen benchmark report."""
+def print_report(
+    results: List[Tuple[int, float, float]],
+    checkpoint_path: Path,
+    baseline_iou: float,
+) -> None:
+    """Print a one-screen benchmark report with delta vs locked baseline."""
     bests = [r[1] for r in results]
     finals = [r[2] for r in results]
     n = len(results)
+    best_mean = sum(bests) / n
 
     print(f"\n=== Multi-seed benchmark: {checkpoint_path.name} ===")
     print(f"Path: {checkpoint_path}")
@@ -101,13 +106,26 @@ def print_report(results: List[Tuple[int, float, float]], checkpoint_path: Path)
     for seed, best, final in results:
         print(f"{seed:<6} {best:<12.4f} {final:<12.4f}")
     print()
-    print(f"Best IoU   : mean={sum(bests)/n:.4f}  min={min(bests):.4f}  max={max(bests):.4f}")
+    print(f"Best IoU   : mean={best_mean:.4f}  min={min(bests):.4f}  max={max(bests):.4f}")
     print(f"Final IoU  : mean={sum(finals)/n:.4f}  min={min(finals):.4f}  max={max(finals):.4f}")
     print()
     for thr in (0.20, 0.30, 0.40, 0.50):
         reach = sum(1 for v in bests if v >= thr) / n
         bar = "#" * int(reach * 20)
         print(f"reach>={thr:.2f} : {int(reach*100):>3}%  {bar}")
+    print()
+    delta = best_mean - baseline_iou
+    pct = 100.0 * delta / baseline_iou if baseline_iou > 0 else 0.0
+    sign = "+" if delta >= 0 else ""
+    if delta >= 0.02:
+        verdict = "BEATS baseline (>= +0.02 delta)"
+    elif delta >= 0:
+        verdict = "within noise (below +0.02 delta)"
+    else:
+        verdict = "UNDER baseline"
+    print(
+        f"vs baseline {baseline_iou:.4f}: {sign}{delta:.4f} ({sign}{pct:.1f}%) — {verdict}"
+    )
 
 
 def main() -> int:
@@ -123,6 +141,16 @@ def main() -> int:
     parser.add_argument("--num-heads", type=int, default=4)
     parser.add_argument("--warmup", type=int, default=25)
     parser.add_argument("--late-cleanup", type=float, default=0.75)
+    parser.add_argument(
+        "--baseline-iou",
+        type=float,
+        default=0.329,
+        help=(
+            "Reference MS-10 IoU to compare against (default 0.329, the "
+            "post-RNG-fix locked baseline from docs/DECISION_2026-04-19.md). "
+            "Report prints delta and verdict."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.checkpoint.exists():
@@ -141,7 +169,7 @@ def main() -> int:
         warmup=args.warmup,
         late_cleanup_start_frac=args.late_cleanup,
     )
-    print_report(results, args.checkpoint)
+    print_report(results, args.checkpoint, args.baseline_iou)
     return 0
 
 
