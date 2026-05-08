@@ -8,11 +8,6 @@
 > (locked baseline, experiments table, dead ends, open questions, next
 > experiment). When this file and the Decision Doc disagree, the
 > Decision Doc wins.
->
-> Supporting detail: [`docs/HANDOFF_2026-04-10.md`](../../docs/HANDOFF_2026-04-10.md),
-> [`docs/leaderboard.md`](../../docs/leaderboard.md),
-> [`docs/visual_diagnosis_2026-04-10.md`](../../docs/visual_diagnosis_2026-04-10.md),
-> [`docs/plateau_analysis_2026-04-10.md`](../../docs/plateau_analysis_2026-04-10.md).
 
 ## Locked baseline (updated 2026-04-20, experiment #16)
 
@@ -43,7 +38,6 @@ avg 0.290, legacy avg 0.130). Always set it when training new models.
 2. **Do NOT "fix" varying `world_seed` in evaluator to be constant per
    generation.** Looks like a bug, is a free regulariser — locking the
    seed regressed IoU from 0.41 to 0.26.
-   See [`docs/experiment_report_2026-04-10.md`](../../docs/experiment_report_2026-04-10.md) Exp 7.
 
 3. **`t_trunk_weight` is a dead hyperparameter.** 6-config sweep proved
    `t15 ≡ t30` bit-identically. Even after directional divide actions
@@ -74,9 +68,8 @@ avg 0.290, legacy avg 0.130). Always set it when training new models.
 7. **HPO breakthrough of 0.4254 was unreproducible (RNG bug).** The
    HPO v2 sweep winner (trial 17, 2026-04-11) reported MS-10 0.4254.
    After commit `1a10ac9` fixed the `run_trial` RNG seeding, the
-   reproducible MS-10 collapsed to **0.329**. Postmortem:
-   `docs/research/hpo_v2_report.md` § "2026-04-11 RNG postmortem". Do
-   not cite 0.4254 as a performance number; use 0.329.
+   reproducible MS-10 collapsed to **0.329**. Do not cite 0.4254 as a
+   performance number; use 0.329.
 
 8. **`t_morph_bonus` was dead code before 2026-04-15.** Computed but
    never added to fitness in every experiment before `8d31bc2`. Fixing

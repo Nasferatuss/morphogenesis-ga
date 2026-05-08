@@ -48,3 +48,37 @@ htmlcov/
 # Local-only LinkedIn draft (keep out of public repo)
 docs/linkedin_post.md
 
+
+# Source markdown of published Habr article (kept local-only)
+docs/habr_article.md
+
+# Personal/strategic context (private)
+context/
+
+# Temp / scratch files
+old_block.txt
+
+# Internal docs (not for public repo)
+AGENTS.md
+docs/leaderboard.md
+docs/plateau_analysis_*.md
+docs/sweep_report_*.md
+docs/visual_diagnosis_*.md
+docs/experiment_report_*.md
+docs/research/
+docs/benchmarks/
+
+# Internal Claude Code rules / agents / skills (keep only experiment-loop
+# + experimental-findings — those are referenced from the published article)
+.claude/rules/roadmap-status.md
+.claude/agents/
+.claude/commands/
+.claude/skills/experiment-config/
+.claude/skills/fitness-engineering/
+.claude/skills/ga-optimization/
+.claude/skills/python-refactoring/
+.claude/skills/pytorch-patterns/
+.claude/skills/tdd-workflow/
+
+# Internal hooks
+scripts/hooks/
