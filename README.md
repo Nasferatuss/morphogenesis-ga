@@ -204,10 +204,9 @@ deferred as a dedicated session).
 ## Article
 
 A long-form write-up of the project is on Habr:
-[*Месяц с Neural Cellular Automata — 22 эксперимента, потолок 0.44 и
-дисциплина которой я не ожидал*](#) *(link will be added after
-publication)*. The article is the recommended entry point for anyone
-who wants the narrative; this README is the technical map.
+[*Я повторял Growing Neural CA за вечер. Ушёл месяц*](https://habr.com/ru/sandbox/284100/).
+The article is the recommended entry point for anyone who wants the
+narrative; this README is the technical map.
 
 The article was written in collaboration with **Claude Code** (first
 hands-on experience working with an AI coding agent on a multi-week
