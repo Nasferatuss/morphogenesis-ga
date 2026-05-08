@@ -45,3 +45,6 @@ htmlcov/
 # Claude Code user-local settings (allow/deny lists are personal)
 .claude/settings.local.json
 
+# Local-only LinkedIn draft (keep out of public repo)
+docs/linkedin_post.md
+
