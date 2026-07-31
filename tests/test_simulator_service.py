@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 
-import pytest
 import torch
 
 from core.services.simulator import run_single_simulation

@@ -40,7 +40,7 @@ The repository is a complete experimental record:
 20+ documented experiments, [a live decision journal](docs/DECISION_2026-04-19.md),
 a frozen reproducibility baseline, golden-anchor regression tests at
 `1e-6` tolerance on CUDA, and a hooks-enforced
-[Pre-Experiment Gate](.claude/skills/experiment-config/SKILL.md) that
+[Pre-Experiment Gate](.claude/skills/experiment-loop/SKILL.md) that
 refuses to start training without a written hypothesis and a
 multi-seed success criterion.
 
@@ -163,10 +163,10 @@ failure` get appended to the Decision Doc by the
 Failures move the corresponding axis to `§3 Dead Ends` so it is never
 retested by accident.
 
-There is also a Stop-hook that fires at the end of every Claude Code
-turn ([`scripts/hooks/decision-doc-reminder.sh`](scripts/hooks/decision-doc-reminder.sh))
-and yells if you touched `configs/exp_*` or `runs/` without updating
-the journal.
+There is also a Stop-hook that fires at the end of every Claude Code turn
+and yells if you touched `configs/exp_*` or `runs/` without updating the
+journal. The hook itself is local-only — it hard-codes paths from my machine
+and is kept out of this tree.
 
 ---
 
@@ -180,11 +180,19 @@ Same seed produces a bit-identical fitness trajectory:
 pytest tests/test_golden.py -v
 ```
 
-The frozen configs are `configs/reproducibility_freeze_v1.yaml` and
-`configs/reproducibility_freeze_v2.yaml`. The HPO winner from
-2026-04-11 reported MS-10 = 0.4254, was found unreproducible
-([RNG bug postmortem](docs/research/hpo_v2_report.md)), fixed in
-commit `1a10ac9`, and locked at 0.329 — all logged and tested.
+The frozen config is [`configs/reproducibility_freeze_v1.yaml`](configs/reproducibility_freeze_v1.yaml)
+— the CPU anchors (v1, v3, v4) all run it end-to-end; v1 and v3 are kept as
+`xfail` history, each with the fitness bug that superseded it named in the
+skip reason, and v4 is the live anchor. The CUDA freeze is not published.
+
+The HPO winner from 2026-04-11 reported MS-10 = 0.4254 and was found
+unreproducible: `run_trial` called `set_seed()` once per study, so trial 17's
+RNG state depended on the 17 trials before it. Fixed in commit `1a10ac9`;
+re-training from the same config with a clean `set_seed(42)` lands at 0.329,
+and that is the number locked. The full post-mortem is the header of
+[`configs/curriculum_hpo_v1.yaml`](configs/curriculum_hpo_v1.yaml); the
+non-reproducible checkpoint is kept at `runs/champion_hpo_v1/best.pt` and
+labelled as such.
 
 ---
 

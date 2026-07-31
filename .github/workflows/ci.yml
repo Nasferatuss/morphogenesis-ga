@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check src/ run_train.py
+      - run: ruff check .
 
   test:
     runs-on: ubuntu-latest
@@ -25,9 +25,12 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
+        # CPU wheel first so the extras below don't pull the CUDA build.
+        # Extras come from pyproject, not a hand-maintained list, so a new
+        # optional dependency can't silently break the test job again.
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install pyyaml numpy imageio pytest pytest-cov pytest-benchmark
+          pip install -e ".[dev,tb,hpo,tracker]"
       - name: Run tests
         run: pytest tests/ --cov=src --cov-report=term-missing -q
       - name: Smoke test

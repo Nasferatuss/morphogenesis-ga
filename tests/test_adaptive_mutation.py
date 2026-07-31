@@ -15,7 +15,6 @@ from agents.train_agent.adaptive_mutation import (
     adapt_mutation_std,
 )
 
-
 # -----------------------------------------------------------------------------
 # AdaptiveMutationConfig.from_dict
 # -----------------------------------------------------------------------------

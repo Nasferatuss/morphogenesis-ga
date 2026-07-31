@@ -11,19 +11,17 @@ from __future__ import annotations
 from typing import List
 from unittest.mock import MagicMock
 
-import pytest
 import torch
 from torch import nn
 
-from src.model import NUM_ACTIONS, NUM_NEIGHBORS
+from src.model import NUM_ACTIONS
 from src.simulate import (
     _current_die_cap,
     _late_cleanup_ratio,
     _normalize_die_cap_schedule,
     simulate,
 )
-from src.world import ACTION_BECOME_A, ACTION_DIE, ACTION_DIVIDE, ACTION_STAY, World
-
+from src.world import ACTION_DIE, ACTION_DIVIDE, ACTION_STAY, World
 
 # -----------------------------------------------------------------------------
 # Helper models — deterministic, always emit one action

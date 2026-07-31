@@ -30,7 +30,6 @@ from torch.utils.tensorboard import SummaryWriter
 from src.benchmark import BenchmarkSummary, evaluate_t_benchmark
 from src.model import LittleLM
 
-
 # ---------------------------------------------------------------------------
 # Mutable state — 6 former nonlocals
 # ---------------------------------------------------------------------------

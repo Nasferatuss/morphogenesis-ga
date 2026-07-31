@@ -38,7 +38,7 @@ def main() -> int:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from matplotlib.animation import FuncAnimation, PillowWriter
-        from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+        from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
     except ImportError:
         print("[ERROR] matplotlib required. Run: pip install matplotlib", file=sys.stderr)
         return 1
@@ -47,7 +47,6 @@ def main() -> int:
 
     BG = "#0b1220"
     NODE_BG = "#111827"
-    NODE_EDGE = "#1f2937"
     TEXT_PRIMARY = "#e5e7eb"
     TEXT_SECONDARY = "#9ca3af"
     PARTICLE_TRAIL = "#34d399"

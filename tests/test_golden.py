@@ -22,7 +22,7 @@ from src.fitness import compute_fitness, compute_iou
 from src.ga import crossover, init_population, mutate, select_elite
 from src.model import LittleLM
 from src.simulate import simulate
-from src.targets import make_target, make_target_T, make_target_cross
+from src.targets import make_target, make_target_cross, make_target_T
 from src.utils import set_seed
 from src.world import CELL_A, World
 
@@ -73,7 +73,10 @@ class TestGoldenGA:
     def test_full_ga_cycle_deterministic(self):
         """One full GA cycle must produce identical results with same seed."""
         set_seed(42)
-        factory = lambda: LittleLM(embed_dim=16, num_heads=2)
+
+        def factory():
+            return LittleLM(embed_dim=16, num_heads=2)
+
         pop = init_population(8, factory)
 
         # Evaluate with simple fitness (just IoU of random grid)

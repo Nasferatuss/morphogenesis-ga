@@ -13,7 +13,7 @@ import argparse
 import csv
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 
 def read_csv(csv_path: Path) -> Tuple[List[int], List[float], List[str]]:

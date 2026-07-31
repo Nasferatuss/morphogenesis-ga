@@ -17,7 +17,6 @@ from unittest.mock import MagicMock, patch
 
 from core.memory.mlflow_tracker import MLflowConfig, MLflowTracker
 
-
 # --------------------------------------------------------------------------- #
 # MLflowConfig.from_dict
 # --------------------------------------------------------------------------- #

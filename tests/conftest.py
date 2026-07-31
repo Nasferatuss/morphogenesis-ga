@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-import torch
 
 from src.utils import set_seed
 from src.world import World

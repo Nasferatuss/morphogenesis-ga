@@ -27,7 +27,6 @@ from core.services.hpo import (
     suggest_params,
 )
 
-
 # ---------------------------------------------------------------------------
 # ParamSpec validation
 # ---------------------------------------------------------------------------
@@ -110,8 +109,15 @@ parameters:
             load_search_space(path)
 
     def test_real_v1_search_space(self) -> None:
-        """Smoke: the shipped v1 search space parses cleanly."""
+        """Smoke: the shipped v1 search space parses cleanly.
+
+        The sweep definition is not part of the published tree, so this test
+        skips rather than errors when it is absent — the parser itself is
+        covered by the synthetic cases above.
+        """
         path = Path(__file__).resolve().parent.parent / "configs" / "hpo" / "search_space_v1.yaml"
+        if not path.exists():
+            pytest.skip(f"{path.name} is not published in this repository")
         specs = load_search_space(path)
         assert len(specs) >= 10
         strategy_spec = next(

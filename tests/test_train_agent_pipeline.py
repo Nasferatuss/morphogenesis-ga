@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import pytest
 import torch
 
 from agents.train_agent.pipeline import train_ga

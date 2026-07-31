@@ -22,11 +22,11 @@ import torch
 
 from agents.train_agent import benchmark_runner as _benchmark_module
 from agents.train_agent import mini_transfer as _mini_transfer_module
-from agents.train_agent.evaluator import EvaluatorState
 from agents.train_agent.adaptive_mutation import (
     AdaptiveMutationConfig,
     adapt_mutation_std,
 )
+from agents.train_agent.evaluator import EvaluatorState
 from agents.train_agent.mutation import (
     TMutationConfig,
 )
